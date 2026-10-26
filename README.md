@@ -1,6 +1,6 @@
 # Chat App
 
-**Real-time messaging with FastAPI, Redis and Docker — designed for deployment on AWS.**
+**Real-time messaging with FastAPI, Redis and Kubernetes — designed for deployment on AWS.**
 
 A documented engineering project exploring WebSocket communication across backend replicas, an accessible browser experience, and automated infrastructure and delivery on a single EC2 host.
 
@@ -8,13 +8,13 @@ A documented engineering project exploring WebSocket communication across backen
 
 ## AWS Architecture Diagram
 
-![Planned Chat App architecture in AWS Mumbai: browser users connect through an Internet Gateway to a single EC2 instance running an Nginx gateway, static frontend, two FastAPI replicas and Redis. Terraform provisions infrastructure through AWS APIs and stores state separately in S3.](docs/images/aws-single-host-architecture-v2.png)
+![Planned AWS K3s architecture: one EC2 Kubernetes node with a gateway, frontend, two backend Pods and Redis; private Terraform state in S3.](docs/images/aws-k3s-architecture.png)
 
-*Planned single-host deployment in `ap-south-1` (Mumbai). [Open the full-size diagram](docs/images/aws-single-host-architecture-v2.png).*
+*Planned single-node K3s deployment in `ap-south-1` (Mumbai). [Open the full-size diagram](docs/images/aws-k3s-architecture.png).*
 
 ## Project Status
 
-**Current phase: documentation and design.** This repository contains requirements, technical specifications and implementation plans. Application source code, Docker configurations, Terraform resources and CI/CD workflows have yet to be implemented.
+**Current phase: documentation and design.** This repository contains requirements, technical specifications and implementation plans. Application source code, Kubernetes manifests, container images, Terraform resources and CI/CD workflows have yet to be implemented.
 
 | Area | Status |
 | --- | --- |
@@ -43,13 +43,13 @@ The project brings application development and operations into one workflow: def
 
 ## Architecture
 
-The deployment target is **five application containers across four Compose services** on one EC2 instance. The backend service runs as two replicas.
+The deployment target is **five steady-state application Pods across four Kubernetes Deployments** on one EC2 K3s node, plus platform Pods. Local development uses k3d. The backend Deployment runs two replicas.
 
 1. Nginx serves as the public entry point and routes static requests and WebSocket connections.
 2. Each backend validates incoming messages and publishes a server-generated event to Redis.
 3. Both backends consume the event and deliver it through bounded queues to their connected clients.
 
-Only the gateway publishes application ports on the host. Redis uses an internal data network; gateway and frontend have no direct Redis connection. Terraform stores infrastructure state and lockfiles in S3, outside the chat message path. Backend replication demonstrates distributed messaging within one host and does not provide host-level high availability.
+K3s ServiceLB exposes gateway ports 80/443 on the node; no managed AWS load balancer is required. Default-deny NetworkPolicies and explicit allowances isolate Redis from the gateway and frontend. Terraform stores infrastructure state and lockfiles in S3, outside the chat message path. Backend replication demonstrates distributed messaging within one host and does not provide host-level high availability.
 
 See the [architecture guide](docs/ARCHITECTURE.md) for networking, lifecycle and failure behavior, and the [API specification](docs/API_SPECIFICATION.md) for the wire contract.
 
@@ -62,7 +62,7 @@ See the [architecture guide](docs/ARCHITECTURE.md) for networking, lifecycle and
 | Backend | Python, FastAPI, Uvicorn, Pydantic | Async sessions, validation and event handling |
 | Messaging | Redis Pub/Sub, `redis.asyncio` | Live event distribution across replicas |
 | Web serving | Nginx | Static assets, TLS termination and reverse proxying |
-| Containers | Docker, Docker Compose v2 | Local integration and single-host deployment |
+| Containers and orchestration | Docker/OCI, k3d, K3s/containerd, Kustomize | Off-host image builds, local Kubernetes and single-node AWS deployment |
 | Infrastructure | AWS EC2, EBS, VPC, S3, Terraform | Compute, networking, storage and infrastructure state |
 | Delivery | GitHub Actions, OCI image registry | Automated checks, builds and release delivery |
 | Quality and security | pytest, Hypothesis, Trivy, Cosign | Behavior testing, image scanning and artifact verification |
@@ -83,6 +83,7 @@ Choose a starting point:
 | Your goal | Read first |
 | --- | --- |
 | Understand the product and scope | [Requirements](docs/REQUIREMENTS.md) → [Architecture](docs/ARCHITECTURE.md) |
+| Study HLD/LLD or plan future growth | [System design handbook](docs/design/README.md) → [Architecture evolution](docs/design/ARCHITECTURE_EVOLUTION.md) |
 | Design the interface | [Frontend & UI/UX](docs/FRONTEND.md) → [API specification](docs/API_SPECIFICATION.md) |
 | Build the messaging services | [Backend](docs/BACKEND.md) → [Configuration](docs/CONFIGURATION.md) |
 | Plan implementation work | [Implementation plan](docs/IMPLEMENTATION_PLAN.md) → [Development guide](docs/DEVELOPMENT.md) |
@@ -109,6 +110,7 @@ The future source layout is described in [Project Structure](docs/PROJECT_STRUCT
 | --- | --- |
 | [Requirements](docs/REQUIREMENTS.md) | User journeys, scope, acceptance criteria and measurable objectives |
 | [Architecture](docs/ARCHITECTURE.md) | Service topology, event flow, concurrency and failure behavior |
+| [System Design: HLD, LLD and Future Growth](docs/design/README.md) | Detailed design, sequence/data models, capacity planning, upgrade stages, migration and review templates |
 | [Frontend & UI/UX](docs/FRONTEND.md) | Screen design, accessibility, browser state and integration |
 | [Backend](docs/BACKEND.md) | Modules, messaging, validation, recovery and service engineering |
 | [API Specification](docs/API_SPECIFICATION.md) | Routes, event schemas, input rules and close codes |
@@ -131,6 +133,7 @@ The future source layout is described in [Project Structure](docs/PROJECT_STRUCT
 | Guide | Contents |
 | --- | --- |
 | [AWS Free Tier Requirements](docs/AWS_FREE_TIER_REQUIREMENTS.md) | Account eligibility, resources, access, cost review and teardown |
+| [Kubernetes deployment](docs/KUBERNETES.md) | Primary k3d/K3s topology, Pods, Services, policies, probes and resource planning |
 | [Infrastructure](docs/INFRASTRUCTURE.md) | AWS topology, Terraform design and state management |
 | [CI/CD](docs/CICD.md) | Validation, image publication and delivery pipeline design |
 | [Deployment](docs/DEPLOYMENT.md) | First deployment, release verification and rollback |
@@ -146,11 +149,13 @@ For change history, see [CHANGELOG.md](CHANGELOG.md). The [original planning dis
 | --- | --- | --- |
 | 1. Confirm contracts | Consistent schemas, configuration and dependency choices | Reviewed contracts and resolved implementation blockers |
 | 2. Build the application | Backend messaging and accessible frontend | Unit, contract and browser checks |
-| 3. Integrate containers | Five-container stack with isolated networks | Cross-replica messaging and failure tests |
+| 3. Integrate containers | Four Deployments, five application Pods and enforced policies | Cross-replica messaging and failure tests |
 | 4. Prepare infrastructure and delivery | Terraform and CI/CD workflows | Reviewed plans, verified artifacts and deployment checks |
 | 5. Validate operations | Recovery, capacity and rollback procedures | Recorded measurements and a successful rollback rehearsal |
 
 All phases remain planned. The [implementation plan](docs/IMPLEMENTATION_PLAN.md) contains the detailed tasks and acceptance gates.
+
+[Kubernetes is the primary deployment path](docs/KUBERNETES.md). Validate locally with k3d before spending AWS credits on K3s. The previous Compose proposal and older architecture images are historical.
 
 ## Scope and Validation
 
@@ -158,7 +163,7 @@ The initial scope is text messaging in one anonymous global channel. Accounts, p
 
 The requirements define an initial experiment with **25 concurrent clients and 5 aggregate messages per second**, followed by latency, delivery, resource and recovery checks. These are validation targets, not measured capacity. See [Requirements](docs/REQUIREMENTS.md) and [Testing](docs/TESTING.md) for the full conditions.
 
-AWS deployment targets a single `t3.micro` in Mumbai (`ap-south-1`). Actual eligibility, credits, resource prices and runtime usage must be checked for the account; the project does not guarantee zero cost. Use the [AWS requirements guide](docs/AWS_FREE_TIER_REQUIREMENTS.md) before provisioning.
+AWS deployment targets a measured **2-vCPU / 4-GiB candidate**, evaluating `c7i-flex.large` in Mumbai (`ap-south-1`). Actual eligibility, credits, resource prices and runtime usage must be checked for the account; K3s avoids the EKS cluster fee, but EC2 and related services still consume credits. Plan against the actual eligible balance, with a proposed $20 reserve from $100; the project does not guarantee zero cost. Use the [AWS requirements guide](docs/AWS_FREE_TIER_REQUIREMENTS.md) before provisioning.
 
 ## Contributing
 

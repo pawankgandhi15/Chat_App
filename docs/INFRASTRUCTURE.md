@@ -1,279 +1,67 @@
-# Infrastructure and Cost Plan
+# AWS Infrastructure Design
 
-**Status:** Proposed AWS/Terraform design and cost accounting model. See the [documentation index](../README.md).
+**Design revision 5 — 2026-10-26. Status: specification only.** Terraform and bootstrap files do not exist. [Kubernetes](KUBERNETES.md) defines the application platform; [AWS requirements](AWS_FREE_TIER_REQUIREMENTS.md) defines account and cost gates.
 
-**Design Revision 4 (2026-10-25):** Production-grade Terraform HCL specifications, IMDSv2-hardened EC2 instance configuration, automated cloud-init bootstrap blueprints, S3 state locking architecture, and quantitative AWS cost models.
+## Resource inventory
 
----
-
-## AWS Resource Inventory & Architecture
-
-```
-AWS Cloud: Region ap-south-1 (Mumbai)
-└── VPC (10.0.0.0/16)
-    ├── Internet Gateway (chat-app-igw)
-    └── Public Subnet (10.0.1.0/24, AZ ap-south-1a)
-        ├── Route Table (0.0.0.0/0 -> IGW)
-        ├── Security Group (chat-app-sg)
-        │   ├── Ingress: 80, 443 (0.0.0.0/0)
-        │   ├── Ingress: 22 (RESTRICTED to operator CIDR)
-        │   └── Egress: ALL (0.0.0.0/0)
-        └── EC2 Instance (chat-app-host: t3.micro)
-            ├── IMDSv2 Enforced (http_tokens = "required")
-            ├── Encrypted EBS gp3 (20 GB, kms_key_id = default)
-            └── Docker Engine 26.0+ & Compose v2.27+
-```
-
----
-
-## Production Terraform HCL Blueprint (`terraform/main.tf`)
-
-```hcl
-terraform {
-  required_version = ">= 1.10.0"
-  required_providers {
-    aws = {
-      source  = "hashicorp/aws"
-      version = "~> 5.73.0"
-    }
-  }
-
-  # Production S3 Backend with Native State Locking (Terraform 1.10+)
-  backend "s3" {
-    bucket       = "chatapp-tfstate-ap-south-1-prod"
-    key          = "prod/terraform.tfstate"
-    region       = "ap-south-1"
-    encrypt      = true
-    use_lockfile = true # Deprecates legacy DynamoDB lock table
-  }
-}
-
-provider "aws" {
-  region = var.aws_region
-  default_tags {
-    tags = {
-      Project     = "chat-app"
-      Environment = "production"
-      ManagedBy   = "terraform"
-    }
-  }
-}
-
-# 1. VPC & Networking
-resource "aws_vpc" "main" {
-  cidr_block           = "10.0.0.0/16"
-  enable_dns_hostnames = true
-  enable_dns_support   = true
-  tags                 = { Name = "chat-app-vpc" }
-}
-
-resource "aws_internet_gateway" "gw" {
-  vpc_id = aws_vpc.main.id
-  tags   = { Name = "chat-app-igw" }
-}
-
-resource "aws_subnet" "public" {
-  vpc_id                  = aws_vpc.main.id
-  cidr_block              = "10.0.1.0/24"
-  map_public_ip_on_launch = true
-  availability_zone       = "${var.aws_region}a"
-  tags                    = { Name = "chat-app-public-subnet" }
-}
-
-resource "aws_route_table" "public" {
-  vpc_id = aws_vpc.main.id
-  route {
-    cidr_block = "0.0.0.0/0"
-    gateway_id = aws_internet_gateway.gw.id
-  }
-  tags = { Name = "chat-app-public-rt" }
-}
-
-resource "aws_route_table_association" "public" {
-  subnet_id      = aws_subnet.public.id
-  route_table_id = aws_route_table.public.id
-}
-
-# 2. Ingress & Egress Security Group
-resource "aws_security_group" "web" {
-  name        = "chat-app-sg"
-  description = "Ingress for HTTP/HTTPS and restricted operator SSH"
-  vpc_id      = aws_vpc.main.id
-
-  ingress {
-    description = "HTTP Ingress"
-    from_port   = 80
-    to_port     = 80
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "HTTPS Ingress"
-    from_port   = 443
-    to_port     = 443
-    protocol    = "tcp"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
-  ingress {
-    description = "Restricted Operator SSH"
-    from_port   = 22
-    to_port     = 22
-    protocol    = "tcp"
-    cidr_blocks = var.ssh_allowed_cidrs # Must be explicit operator IP
-  }
-
-  egress {
-    description = "Allow all outbound traffic"
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-}
-
-# 3. EC2 Instance Hardening
-data "aws_ami" "ubuntu" {
-  most_recent = true
-  owners      = ["099720109477"] # Canonical
-  filter {
-    name   = "name"
-    values = ["ubuntu/images/hvm-ssd-gp3/ubuntu-noble-24.04-amd64-server-*"]
-  }
-}
-
-resource "aws_key_pair" "deployer" {
-  key_name   = "chat-app-deployer-key"
-  public_key = file(pathexpand(var.public_key_path))
-}
-
-resource "aws_instance" "app_host" {
-  ami                  = data.aws_ami.ubuntu.id
-  instance_type        = "t3.micro"
-  subnet_id            = aws_subnet.public.id
-  vpc_security_group_ids = [aws_security_group.web.id]
-  key_name             = aws_key_pair.deployer.key_name
-
-  # Enforce IMDSv2 (Neutralizes SSRF credential theft)
-  metadata_options {
-    http_endpoint               = "enabled"
-    http_tokens                 = "required"
-    http_put_response_hop_limit = 1
-  }
-
-  # Encrypted 20GB gp3 Root Volume
-  root_block_device {
-    volume_size           = 20
-    volume_type           = "gp3"
-    encrypted             = true
-    delete_on_termination = true
-  }
-
-  credit_specification {
-    cpu_credits = "standard" # Avoid unexpected surplus charges
-  }
-
-  user_data = file("${path.module}/user_data.sh")
-  tags      = { Name = "chat-app-instance" }
-}
-```
-
----
-
-## Automated EC2 Cloud-Init Script (`terraform/user_data.sh`)
-
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
-
-# Log all output to cloud-init log
-exec > >(tee /var/log/user-data.log|logger -t user-data -s 2>/dev/console) 2>&1
-
-echo "[+] Starting Chat App Host Initialization..."
-
-# 1. Update OS and install prerequisites
-apt-get update -y
-apt-get install -y ca-certificates curl gnupg lsb-release ufw
-
-# 2. Add Docker official GPG key and APT repository
-install -m 0755 -d /etc/apt/keyrings
-curl -fsSL https://download.docker.com/linux/ubuntu/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg
-chmod a+r /etc/apt/keyrings/docker.gpg
-
-echo \
-  "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/ubuntu \
-  $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-
-# 3. Install Docker Engine and Compose plugin
-apt-get update -y
-apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-
-# 4. Enable Docker daemon
-systemctl enable --now docker
-usermod -aG docker ubuntu
-
-# 5. Configure Docker daemon log rotation
-cat <<EOF > /etc/docker/daemon.json
-{
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "10m",
-    "max-file": "3"
-  }
-}
-EOF
-systemctl restart docker
-
-# 6. Initialize release directories
-mkdir -p /home/ubuntu/chat-app/releases
-mkdir -p /home/ubuntu/chat-app/secrets
-chown -R ubuntu:ubuntu /home/ubuntu/chat-app
-chmod 700 /home/ubuntu/chat-app/secrets
-
-echo "[+] Initialization complete successfully."
-```
-
----
-
-## Quantitative AWS Cost Model (`ap-south-1`)
-
-Complete the [AWS Free Tier requirements](AWS_FREE_TIER_REQUIREMENTS.md) before provisioning. Account-specific credits and benefits must be verified; this design does not guarantee zero cost or a fixed monthly bill. AWS distinguishes legacy accounts from newer credit-based offers. See [EC2 Free Tier eligibility](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-free-tier-usage.html).
-
-| Billable Resource | Planned Quantity | Estimation Requirement |
+| Resource | Proposed configuration | Validation |
 | --- | --- | --- |
-| EC2 compute | One `t3.micro` with 2 vCPUs and 1 GiB RAM | Current Mumbai Linux On-Demand rate multiplied by planned runtime; explicitly use Standard CPU credit mode. |
-| EBS storage | One encrypted 20 GB `gp3` root volume | Regional storage rate for its full lifetime, including periods when the host is stopped; add snapshots or extra performance if selected. |
-| Public IPv4 | One address | Published USD 0.005 per address-hour before applicable account benefits; see [VPC pricing](https://aws.amazon.com/vpc/pricing/). |
-| Data transfer | Measured or estimated egress | Check applicable regional rates and remaining account-wide allowances. |
-| S3 Terraform state | State, lock objects and retained versions | Include storage and API requests; no assumed free allocation. |
-| Optional services | Only explicitly selected resources | Add DNS, monitoring, backup and other service costs to the estimate. |
+| Region | `ap-south-1` / Mumbai | Confirm account access, quotas and selected instance availability. |
+| VPC | `10.0.0.0/16` | Avoid overlap with local/private connectivity. |
+| Public subnet | `10.0.1.0/24`, one availability zone | Default IPv4 route through Internet Gateway. |
+| EC2 | Ubuntu 24.04 LTS x86_64 candidate; 2 vCPU / 4 GiB | Resolve trusted regional AMI; validate K3s compatibility and capacity. |
+| Instance type | `c7i-flex.large` candidate | Confirm allowed by plan, region and estimate; never silently substitute. |
+| Root volume | 20 GiB encrypted gp3 starting size | Measure image/cache/log/state usage; explicitly choose deletion-on-termination. |
+| Public IPv4 | One address while running | Include address-hours in estimate; reassignment can require DNS updates. |
+| Security group | 443 public; 80 only when needed; 22 approved source CIDRs | No public 6443, 8000, 6379 or overlay ports. |
+| IMDS | Require IMDSv2 | Minimize instance profile permissions; review Pod access to metadata. |
+| Terraform state | Private, encrypted, versioned S3 bucket | Block public access; least-privilege state and lock access. |
 
-Use the [AWS Pricing Calculator](https://calculator.aws/) for `ap-south-1`, record the estimate date and assumptions, then apply only credits confirmed for the account. Budget alerts are notifications, not a guaranteed spending cutoff. Record a teardown deadline and inspect usage after billing updates.
+No NAT Gateway, AWS load balancer, EKS cluster or managed data service belongs in the baseline plan. ServiceLB is software on the EC2 node.
 
----
+The candidate type has 2 vCPU and 4 GiB and appears on AWS's newer-account eligibility list. This does not establish launch permission or a free runtime allowance for this account. See [C7i-flex specification](https://aws.amazon.com/ec2/instance-types/c7i/) and [EC2 eligibility](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-free-tier-usage.html).
 
-## Clean Infrastructure Teardown & Verification
+## Terraform interface to implement
 
-To eliminate cloud spending after testing or demonstrations:
+Inputs: account/environment identifiers, region, validated AMI ID, instance type, subnet AZ, administrative CIDRs, hostname, root volume size, resource tags and state configuration. Reject unrestricted SSH, invalid CIDRs, undersized node choices and unresolved placeholders.
 
-```bash
-cd terraform/
-# Review planned resource deletions
-terraform plan -destroy -out=destroy.plan
+Outputs: instance ID, public address, security-group ID and non-secret deployment identifiers. Do not output tokens, private keys, Redis credentials or kubeconfig.
 
-# Apply destruction cleanly
-terraform apply destroy.plan
+Maintain a separate bootstrap/state lifecycle. Pin Terraform and provider versions, commit the provider lockfile and use native S3 locking with `use_lockfile = true` on Terraform 1.10+. Never put credentials into backend configuration committed to Git. State may contain sensitive values even when outputs are marked sensitive.
 
-# Check running project instances; this is only one part of cleanup verification
-aws ec2 describe-instances --filters "Name=tag:Project,Values=chat-app" "Name=instance-state-name,Values=running" --query "Reservations[].Instances[].InstanceId"
-```
+Review the saved plan for unexpected recurring services, changes to the account/region, resource destruction and security exposure. Tag resources with project, environment, owner and planned teardown date. Tags aid inventory but do not stop billing.
 
-Also inspect stopped instances, retained volumes/snapshots, allocated addresses and optional services in the intended account and regions. The separately managed state bucket requires its own retention/cleanup decision after necessary recovery records are preserved. See the [teardown requirements](AWS_FREE_TIER_REQUIREMENTS.md#9-teardown-requirements).
+## Node bootstrap contract
 
----
+1. Validate OS/architecture, disk, time synchronization and package sources.
+2. Install an explicitly selected K3s release through a verified installation process; avoid uncontrolled `latest` upgrades.
+3. Configure K3s server with local worker, SQLite, CoreDNS, network policy and ServiceLB; disable Traefik.
+4. Enable secrets encryption at initial bootstrap and restrict server-token/kubeconfig permissions.
+5. Configure node logging, image cleanup and access policy; avoid exhausting the 20 GiB root disk.
+6. Bootstrap namespace and deployment RBAC separately from application releases.
+7. Verify node readiness, required DNS, policy enforcement and port ownership before deploying the app.
 
-## Related Guides
+K3s runs on the host with containerd; Docker Engine is not the AWS application runtime. No application image builds or load generators run on this node. Platform initialization contains no plaintext credentials in cloud-init/user-data.
 
-[AWS Free Tier requirements](AWS_FREE_TIER_REQUIREMENTS.md) | [Configuration](CONFIGURATION.md) | [Security](SECURITY.md) | [Deployment](DEPLOYMENT.md) | [Operations](OPERATIONS.md)
+## Access paths
+
+Prefer restricted SSH followed by node-local kubectl. The deployer uses namespace-scoped permissions rather than the root K3s kubeconfig. Design issuance, expiry and revocation of its credential before automated deployment.
+
+GitHub OIDC provides AWS authentication, not SSH connectivity. A hosted runner with arbitrary outbound addresses will not satisfy a narrow SSH allowlist. Use an approved runner with known egress or a controlled operator workstation. Do not open SSH or the Kubernetes API to the world to make a pipeline pass.
+
+## Network validation
+
+Prove internet → gateway works and internet → backend/Redis/API fails. Prove gateway → frontend/backend and backend → Redis work; prove gateway/frontend → Redis fails. Validate DNS and kubelet probes under policy. Record actual ServiceLB source-address translation before selecting gateway ingress NetworkPolicy rules.
+
+If an instance role is unnecessary, omit it. If present, use minimal privileges and assess IMDS access from Pods; IMDSv2 alone is not a complete Pod isolation boundary.
+
+## Lifecycle and recovery
+
+An EC2 stop does not delete EBS or all related resources. A terminated node loses local cluster state unless retained/recovered; application messages are ephemeral in either case. Rebuild from infrastructure, platform configuration, verified release and separately protected secrets. Define encrypted backup access and test restore before claiming a platform recovery objective.
+
+Teardown destroys the workload infrastructure from its reviewed state, then inventories retained volumes, snapshots, addresses, buckets and other services. Keep the protected state bucket until destruction is verified; its retention and eventual deletion are explicit decisions. Recheck billing after delayed usage records appear.
+
+## Evidence required
+
+Record plan, region, AMI, instance specification, K3s version, network checks, node measurements, release ID, cost estimate, actual runtime, retained resources and teardown owner. No infrastructure acceptance box is complete yet.
 

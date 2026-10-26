@@ -4,8 +4,24 @@ This file records actual repository changes. Planned application features remain
 
 ## Unreleased
 
+### System design handbook — 2026-10-26
+
+- Added `docs/design/` with HLD, LLD, sequence diagrams, data/protocol design, capacity calculations, staged architecture evolution, migration guidance and review traceability.
+- Added reusable architecture change proposal and ADR templates; linked the handbook from the README and architecture guide.
+- Aligned backend module names with the planned source layout and clarified private health routing. Future scaling options remain proposals; no runtime implementation or infrastructure was added.
+
+### Kubernetes design migration — 2026-10-26
+
+- Promoted Kubernetes to the primary design: local k3d and single-node AWS K3s with containerd.
+- Replaced Compose deployment, network, configuration and rollback instructions with Kubernetes contracts; retained the chat.v1 protocol.
+- Updated sizing to a measured 2-vCPU/4-GiB candidate, account-specific AWS eligibility and a $100 credit worksheet with a proposed reserve.
+- Reconciled acceptance limits, security boundaries, implementation gates and operational procedures; no runtime or AWS resources were created.
+- Added the K3s architecture image and generation prompt; earlier images remain historical.
+
+
 ### Added
 
+- Initial optional Kubernetes guide and credit worksheet (2026-10-26), superseded by the primary K3s design above.
 - Dedicated frontend/UI/UX and backend engineering guides, with technology choices, interaction contracts, module responsibilities, security, testing and handoff requirements (2026-10-26).
 - AWS Free Tier requirements guide with account-specific eligibility, resource prerequisites, cost controls and teardown checks; corrected the infrastructure cost assumptions (2026-10-26).
 - Technology overview describing the stack and original version references.

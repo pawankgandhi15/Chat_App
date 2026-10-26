@@ -1,155 +1,70 @@
-# Testing and Verification Plan
+# Testing and Evidence Plan
 
-**Status:** Planned test specifications, property-based boundary checks, and chaos engineering methodologies. See the [documentation index](../README.md).
+**Design revision 5 — 2026-10-26. Status: no tests implemented or executed.** [Requirements](REQUIREMENTS.md) owns AC-01 through AC-18 and NFR-01 through NFR-08; [API](API_SPECIFICATION.md) owns protocol expectations.
 
-**Design Revision 4 (2026-10-25):** Comprehensive verification harness establishing property-based fuzzing, concrete `pytest-asyncio` fixtures, chaos failure injections, and monotonic load latency calculation models.
+## Test layers
 
----
-
-## Verification Matrix & Acceptance Mapping
-
-| Area | Scenario | Required Invariant / Observation | AC ID | Target |
-| --- | --- | --- | --- | --- |
-| **Startup & Topology** | Spin up complete 5-container Compose cluster. | Gateway serves HTTP 200 on `/`; two backend replicas report ready on `/health`; Redis is isolated. | AC-01 | $\le 10\text{s}$ spin-up |
-| **Cross-Replica Fan-out** | Client A on Replica 1, Client B on Replica 2. | Bidirectional message exchange; each client observes counterpart's `container_id`; zero duplicate deliveries. | AC-02, AC-03 | 100% arrival |
-| **Schema Compliance** | Emit session, chat, and system events. | Payloads strictly conform to `events-v1.schema.json`; valid UUIDv4 IDs and RFC 3339 timestamps. | AC-04, AC-12 | 100% schema match |
-| **Dependency Loss** | Terminate Redis container during active chat. | Backends transition `/health` to 503 within 10s; active sockets close with code 1011; restarts restore health. | AC-05, AC-18 | Health $\le 15\text{s}$ |
-| **Replica Replacement** | Force-kill and restart Backend Replica 1. | Sockets on Replica 1 drop and reconnect to Replica 2; Nginx dynamic DNS resolves replacement IP within 5s. | AC-06 | Zero 502 errors |
-| **XSS & Injection** | Transmit script tags, HTML markup, SQL strings. | Rendered in DOM via `textContent` as literal characters; zero DOM script execution. | AC-07 | Zero XSS vectors |
-| **Input Boundaries** | Send empty text, whitespace, 2,001 chars, binary frame. | Whitespace charges bucket; >2,000 chars rejected with 1008; binary frame rejected with 1003. | AC-07 | Strict rejection |
-| **Backpressure / Slow Client** | Throttle socket read loop on Client A; flood messages. | Client A queue overflows (32 events); server terminates Client A with close code 1013; Client B continues unaffected. | AC-13 | Neighbor isolation |
-| **Diagnostic Privacy** | Public request to `/live` or `/metrics` via Gateway. | Gateway immediately returns HTTP 403 Forbidden; internal queries return valid OpenMetrics. | AC-14 | Zero public leaks |
-| **Network Isolation** | Probe Redis port 6379 from Gateway or Frontend. | TCP SYN packet times out or rejected; no route to host; ACL rejects unauthenticated ping. | AC-17 | Zero route access |
-| **Steady Baseline Load** | 25 concurrent clients, 5 msg/s aggregate, 30 min. | p95 latency < 250ms, p99 < 1,000ms, $\ge 99.9\%$ delivery ratio, host free RAM $\ge 256\text{ MiB}$. | AC-16, NFR-01..05 | Zero OOM |
-
----
-
-## Property-Based Testing Strategy (`hypothesis`)
-
-To prevent parsing ambiguities between Python and JavaScript, property-based tests fuzz boundary text inputs using `hypothesis`:
-
-```python
-from hypothesis import given, strategies as st
-from app.protocol import normalize_message_text, validate_username
-
-# 1. Fuzz Username Validation
-@given(st.text())
-def test_fuzz_username_validation(raw_name):
-    # Only alphanumeric, hyphen, underscore between 1-32 chars must pass
-    import re
-    expected = bool(re.match(r"^[A-Za-z0-9_-]{1,32}$", raw_name))
-    try:
-        result = validate_username(raw_name)
-        assert expected is True
-        assert result == raw_name
-    except ValueError:
-        assert expected is False
-
-# 2. Fuzz Unicode Message Normalization
-@given(st.text(min_size=1, max_size=5000))
-def test_fuzz_message_normalization(raw_text):
-    try:
-        normalized = normalize_message_text(raw_text)
-        # Normalization Invariants:
-        assert "\r" not in normalized  # All CRLF converted to LF
-        assert len(normalized) <= 2000  # Enforces code point ceiling
-        assert not normalized.startswith((" ", "\t", "\n"))  # Trimmed
-        assert not normalized.endswith((" ", "\t", "\n"))    # Trimmed
-    except ValueError:
-        # Rejection must be due to length > 2000 or forbidden C0 controls
-        pass
-```
-
----
-
-## Concrete Pytest Async Integration Fixtures
-
-The integration test suite utilizes isolated Docker networks and ephemeral Redis instances:
-
-```python
-# tests/integration/test_messaging.py
-import pytest
-import asyncio
-import websockets
-import json
-
-@pytest.mark.asyncio
-async def test_cross_replica_bidirectional_delivery():
-    uri_rep1 = "ws://localhost:8001/ws/Alice_Test"
-    uri_rep2 = "ws://localhost:8002/ws/Bob_Test"
-    subprotocol = ["chat.v1"]
-    headers = [("Origin", "http://localhost")]
-
-    async with websockets.connect(uri_rep1, subprotocols=subprotocol, extra_headers=headers) as ws1, \
-               websockets.connect(uri_rep2, subprotocols=subprotocol, extra_headers=headers) as ws2:
-        
-        # 1. Verify connection-local session envelopes
-        session1 = json.loads(await ws1.recv())
-        session2 = json.loads(await ws2.recv())
-        assert session1["type"] == "session"
-        assert session2["type"] == "session"
-        assert session1["container_id"] != session2["container_id"]
-
-        # 2. Consume advisory join broadcasts
-        _ = await ws1.recv()
-        _ = await ws2.recv()
-
-        # 3. Alice sends to Replica 1 -> Bob on Replica 2 receives
-        test_payload = "Cross-replica broadcast message 🚀"
-        await ws1.send(test_payload)
-
-        # Bob receives chat broadcast
-        msg_bob = json.loads(await ws2.recv())
-        assert msg_bob["type"] == "chat"
-        assert msg_bob["user"] == "Alice_Test"
-        assert msg_bob["text"] == test_payload
-        assert msg_bob["container_id"] == session1["container_id"]
-
-        # Alice receives echo confirmation via Redis fan-out
-        msg_alice = json.loads(await ws1.recv())
-        assert msg_alice["event_id"] == msg_bob["event_id"]
-        assert msg_alice["text"] == test_payload
-```
-
----
-
-## Chaos Engineering & Fault Injection Runbooks
-
-| Chaos Experiment | Injection Method | Expected Invariant & Recovery Assertion |
+| Layer | Behaviors to prove | Environment |
 | --- | --- | --- |
-| **Subscriber Coroutine Freeze** | Send `CLIENT PAUSE 15000` via Redis admin socket. | Backend supervisor detects heartbeat non-acknowledgment; drops `/health` to 503; reconnects fresh subscriber loop. |
-| **Redis Network Blackhole** | Inject `iptables -A INPUT -p tcp --dport 6379 -j DROP` on Redis. | TCP socket write/read times out; backends cleanly close active client sockets with code 1011; zero process crashes. |
-| **Backend OOM Simulation** | Send rapid burst of 100,000 messages exceeding socket queues. | Sockets with saturated queues drop with code 1013; container memory stays bounded under 192 MiB ceiling. |
-| **Gateway Upstream Severance** | Terminate Backend Replica A with `docker kill --signal=KILL`. | Nginx dynamic resolver invalidates upstream within 5s; subsequent WebSocket handshakes automatically route to Replica B. |
+| Unit/property | Normalization, Unicode boundaries, settings, event schemas, limiter clocks, queue accounting | Isolated test container; deterministic clocks where appropriate. |
+| Transport contract | Upgrade denial, subprotocol, session-first ordering, frames/close codes, fragmentation | Real selected ASGI/WebSocket server. |
+| Integration | Cross-Pod fan-out, one sender echo, Redis ACL, heartbeat generations | Local k3d with real Redis and two backend Pods. |
+| Browser | Accessibility, safe rendering, retries, drafts, scroll behavior, protocol errors | Browser automation against gateway. |
+| Kubernetes | Selectors, probes, policy enforcement, rollout, resource bounds, complete rollback | Pinned k3d; repeat AWS-specific paths on EC2. |
+| Infrastructure/security | Terraform plan, SG boundaries, public TLS, RBAC and signature rejection | Static validation plus authorized temporary AWS environment. |
+| Load/recovery | Quantitative objectives, failure timelines, node/Pod pressure | Off-node generator against exact candidate deployment. |
 
----
+## Protocol and lifecycle cases
 
-## High-Precision Monotonic Latency Benchmark Model
+Test username boundaries, allowed ASCII syntax, astral Unicode code points, CRLF/lone-CR normalization, ASCII-only boundary trimming and prohibited C0/DEL controls. Do not test against an invented NFKC rule. Distinguish application code-point policy from reassembled transport bytes; fragmented and binary frames need actual transport tests.
 
-Under NFR-01 through NFR-04, end-to-end delivery latency is measured by an external load generator maintaining a single monotonic clock:
+Verify the first frame is a private session envelope with a new connection UUID and correct replica. Concurrent broadcasts must not overtake it. Validate timestamp consistency and event UUIDs. Test sender echo exactly once via Redis, duplicate display names, malformed server events and browser history capped at 500 entries.
 
-```
-[Load Generator (Single Clock Process)]
-  │
-  ├── 1. Timestamp t_send = time.monotonic() (Embedded in message payload marker)
-  ├── 2. Dispatch WebSocket frame to Replica 1
-  │      └── Proxy -> Backend 1 -> Redis PUBLISH -> Backend 2 -> Fan-out
-  └── 3. Recipient on Replica 2 receives frame at t_recv = time.monotonic()
-         └── Latency = (t_recv - t_send) * 1000  [Milliseconds]
-```
+Test concurrent admission near the configured ceiling, token-bucket refill/burst edges, event and byte queue bounds, cleanup under cancellation and ambiguous publish timeout without blind retry. The 64-per-replica ceiling is not a tested-capacity claim.
 
-### Mathematical Formulation of Latency Percentiles:
-Given ordered observations $L = [l_1, l_2, \dots, l_k]$ where $l_i \le l_{i+1}$:
-$$p95 = L_{\lceil 0.95 \times k \rceil}, \quad p99 = L_{\lceil 0.99 \times k \rceil}$$
+## Distributed delivery
 
-### Total Delivery Population Accounting:
-For $M = 9,000\text{ chat publications}$ ($5\text{ msg/s} \times 1,800\text{s}$) across $C = 25\text{ clients}$:
-$$\text{Expected Deliveries } D_{\text{expected}} = M \times C = 9,000 \times 25 = 225,000\text{ recipient deliveries}$$
-$$\text{Timely Delivery Ratio } R = \frac{D_{\text{received } \le 2.0\text{s}}}{D_{\text{expected}}} \ge 0.999 \quad (99.9\%)$$
+Connect clients through the real gateway, inspect session `container_id`, and establish coverage of both backend Pods. Do not assume round-robin assignment. Publish uniquely identifiable test payloads and correlate server event IDs per recipient. Verify all healthy recipients, including the sender, receive one copy.
 
----
+For targeted diagnostics, direct Pod access may isolate a component, but it cannot replace the gateway end-to-end acceptance test.
 
-## Related Guides
+## Fault matrix
 
-[Requirements](REQUIREMENTS.md) | [Architecture](ARCHITECTURE.md) | [Development](DEVELOPMENT.md) | [Operations](OPERATIONS.md) | [Release Checklist](RELEASE_CHECKLIST.md)
+| Fault | Assert |
+| --- | --- |
+| Redis process/network loss | Readiness fails, new admission stops, affected sockets close with 1011. |
+| Subscriber stall with publisher PING healthy | Freshness fails readiness; old-generation nonce cannot restore it. |
+| Redis restored | Readiness <=15s; actively retrying browsers establish a live session <=60s. |
+| Planned backend termination | Admission stops; 1012 drain <=10s; cleanup within total 20s grace. |
+| Forced backend crash | Affected sockets drop; remaining ready endpoint works; retry eventually succeeds. |
+| Slow recipient | 1013 on overflow/write timeout; healthy peers remain within measured targets. |
+| Bad image/config/policy | Deployment fails verification; previous complete bundle restores <=10 minutes. |
+| Concurrent/interrupted deployment | One supported operation proceeds; journal/live-state reconciliation prevents false success. |
+| Node pressure | Events and metrics expose pressure; no OOM/evictions in accepted baseline run. |
+
+A fault experiment cannot be counted as part of the healthy delivery SLO. Report expected gaps separately; the system offers no replay.
+
+## Candidate load experiment
+
+- 25 simultaneous clients distributed 12/13 across backend Pods.
+- Aggregate 5 chat messages/s with 512-byte test payloads.
+- 2-minute warmup, then 30-minute steady observation.
+- Measure send-to-recipient latency using one external generator's monotonic clock.
+- Targets: p95 <250ms, p99 <1000ms; >=99.9% expected deliveries within 2s; zero duplicate event IDs per recipient.
+- Healthy expected deliveries are messages successfully published × continuously connected recipients. Record attempted sends, rejected/ambiguous publications and connectivity separately so they cannot disappear from the result.
+- Node MemAvailable >=512 MiB during steady state; no OOM, swap thrashing or pressure-related evictions. Capture CPU, RSS, descriptors, disk and rollout peaks.
+
+Record exact instance, OS, K3s, image digests, configuration, origins, generator placement and network conditions. C7i-flex performance characteristics differ from T3 credits; report the selected family accurately.
+
+## Network and security tests
+
+Positive paths: browser→gateway, gateway→frontend/backend, backend→Redis and required DNS/probes. Negative paths: public→API/backend/Redis/diagnostics, gateway/frontend→Redis, unauthorized Redis channels/commands and excessive deployer RBAC.
+
+Verify policy enforcement against Service and Pod addresses and actual ServiceLB source NAT. Check secret values are absent from images, manifests, logs and reports. Reject wrong signer, modified configuration, mutable release image references and unsafe resource kinds.
+
+## Evidence package
+
+Keep sanitized test summary, command/tool versions, environment IDs, raw latency samples, event counts, failures, Pod events, node measurements, release/config hashes and rollback timelines. Link evidence to acceptance IDs. Mark missing evidence pending; do not substitute screenshots or a green readiness endpoint for behavioral results.
+
+Static documentation/link validation can run now. Runtime tests require implementation; [release checklist](RELEASE_CHECKLIST.md) tracks those gates.
 

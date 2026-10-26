@@ -2,7 +2,7 @@
 
 **Status:** Proposed requirements; no implementation exists. See the [documentation index](../README.md).
 
-**Design Revision 4 (2026-10-25):** Advanced production-grade baseline establishing strict interface contracts, quantitative reliability and recovery objectives, multi-tenant isolation boundaries, and deterministic acceptance criteria.
+**Design revision 5 (2026-10-26):** Kubernetes baseline: local k3d and one AWS K3s node. All acceptance targets remain unverified; this anonymous single-room app has no authenticated multi-tenant isolation.
 
 ## Purpose
 
@@ -15,7 +15,7 @@ Design and deploy a containerized real-time chat application demonstrating distr
 3. **Session Handshake:** The selected backend validates origin, username syntax, and capacity; reserves an admission slot; upgrades the connection; and immediately dispatches a private, connection-local `session` envelope establishing the client's session UUID and serving container identity.
 4. **Presence Notification:** Once the backend's Redis subscriber acknowledges readiness, an advisory `system` join event is published to the shared Redis bus and broadcast to all connected clients across all backend replicas.
 5. **Real-time Interaction:** The visitor views live connection status, system announcements, and user chat messages. Senders emit plain text messages; backends validate, envelope, and publish to Redis; and all backends fan out the message to their local client queues.
-6. **Graceful Degraded & Reconnect States:** On network loss or server restart, the client transitions to an explicit reconnecting state with exponential backoff and full jitter. If the server is in a draining state, it closes active connections with code `1012` (Service Restart), prompting immediate reconnection to an alternate healthy replica without user intervention. If offline retries are exhausted, the client enters an explicit paused state requiring manual retry without resending unacknowledged drafts.
+6. **Graceful Degraded & Reconnect States:** On network loss or server restart, the client transitions to an explicit reconnecting state with exponential backoff and full jitter. If the server is in a draining state, it closes active connections with code `1012` (Service Restart), prompting bounded, jittered reconnection attempts; the next ready replica is selected by the Service. If offline retries are exhausted, the client enters an explicit paused state requiring manual retry without resending unacknowledged drafts.
 
 Display names are non-authoritative presentation labels. Verified authentication and guaranteed identity uniqueness are outside the baseline scope.
 
@@ -36,48 +36,48 @@ Display names are non-authoritative presentation labels. Verified authentication
 | FR-11 | Connection-Local Handshake | Emit a direct `session` envelope to the connected client before any broadcast events, confirming socket UUID and serving replica without polluting the Redis bus. |
 | FR-12 | Granular Telemetry Exposition | Expose private Prometheus-formatted metrics at `/metrics` (accessible only within internal networks, denied by the public gateway) measuring active connections, message throughput, queue lag, and dependency latencies. |
 | FR-13 | Bounded Resource Accounting | Enforce per-socket token-bucket rate limits, replica-wide publication rate limits, per-socket outbound queue depths (32 events / 256 KiB), and graceful shutdown timeouts. |
-| FR-14 | Segmented Network Topologies | Isolate proxy-facing traffic (`edge_network`) from data persistence (`data_network`). Redis must strictly reside within `data_network` with zero gateway or frontend reachability. |
+| FR-14 | Segmented Network Topologies | Use default-deny Kubernetes NetworkPolicies with explicit gateway-to-frontend/backend, backend-to-Redis and DNS allowances. Gateway/frontend must not reach Redis. |
 | FR-15 | Slow Consumer Mitigation | If a client's outbound queue overflows or socket write exceeds timeout (2s), the backend forcibly terminates that socket with WebSocket close code `1013` (Try Again Later), protecting neighbor sockets. |
-| FR-16 | Graceful Drain & Handoff | On SIGTERM, the backend transitions readiness to 503, stops accepting new handshakes, emits close frame `1012` to active sockets across a 10s drain budget, cleanly unsubscribes from Redis, and terminates within a 20s container grace window. |
-| FR-17 | Authenticated Redis ACLs | Support authenticated Redis access via Docker secret mounts (`REDIS_URL_FILE`), restricting the application user to specific Pub/Sub channels and commands while disabling administrative commands. |
+| FR-16 | Graceful Drain & Handoff | On SIGTERM, the backend transitions readiness to 503, stops accepting new handshakes, emits close frame `1012` to active sockets across a 10s drain budget, cleanly unsubscribes from Redis, and terminates within a 20s Pod termination grace window including hooks. |
+| FR-17 | Authenticated Redis ACLs | Support authenticated Redis access via Kubernetes Secret file mounts (`REDIS_URL_FILE`), restricting the application user to specific Pub/Sub channels and commands while disabling administrative commands. |
 | FR-18 | Strict Header & Origin Enforcement | Gateway sanitizes and rewrites `Host`, `X-Forwarded-For`, and `X-Forwarded-Proto` headers; backend strictly validates `Origin` against a configured allowlist before upgrade. |
 
 ## Operational Requirements
 
-- **Zero Host Contamination:** All application runtime services, database instances, reverse proxies, and integration test harnesses must execute strictly within Docker containers.
+- **Containerized Application:** Application services run as Kubernetes Pods. K3s runs as a host service using containerd; local k3d runs nodes in Docker. Builds and test/load harnesses run off the AWS node.
 - **Network Ingress Protection:** Only gateway ports 80 and 443 are published to the host network interface. Backend port 8000 and Redis port 6379 remain strictly container-private.
 - **Single-Worker Concurrency:** Each FastAPI backend replica runs as a single Uvicorn ASGI worker to maintain predictable asyncio task scheduling and avoid intra-container inter-process synchronization complexity.
 - **Reproducible Infrastructure:** All cloud infrastructure (AWS VPC, subnets, route tables, security groups, EBS volumes, EC2 instance) is declared and provisioned via Terraform with pinned provider versions and remote/isolated state management.
-- **Strict Memory & Log Ceilings:** Docker containers enforce explicit memory limits (`mem_limit`), CPU shares, PID limits, and log rotation (`max-size: 10m`, `max-file: 3`) to prevent out-of-memory kernel panics or disk exhaustion on a `t3.micro` host.
+- **Resource and Log Bounds:** Pods declare measured CPU/memory requests and limits. Configure kubelet/containerd log retention and image garbage collection; monitor node pressure on a 2-vCPU/4-GiB candidate. Limits reduce risk but do not guarantee freedom from OOM or disk exhaustion.
 - **Observability Without Data Leakage:** Structured JSON logging captures lifecycle events, error classes, and duration percentiles while strictly redacting user message payloads, raw IP addresses, and authentication tokens.
-- **Deterministic Rollback:** Support atomic rollbacks to the preceding verified release manifest within 10 minutes in response to failed deployment health or functional verification checks.
+- **Deterministic Rollback:** Support verified bundle rollbacks to the preceding verified release manifest within 10 minutes in response to failed deployment health or functional verification checks.
 
 ## Acceptance Criteria
 
 | ID | Criterion | Evidence Needed for Verification |
 | --- | --- | --- |
-| AC-01 | Baseline Topology Spin-up | Clean `docker compose up -d` brings up gateway, frontend, two backend replicas, and Redis (5 containers across 4 services); frontend loads with HTTP 200 via gateway. |
+| AC-01 | Baseline Topology Spin-up | Applying the implemented local Kubernetes overlay produces four Deployments and five ready application Pods, plus system Pods; frontend loads with HTTP 200 via gateway. |
 | AC-02 | Bidirectional Cross-Replica Messaging | Client A (attached to Replica 1) and Client B (attached to Replica 2) successfully exchange messages; each receives the other's message with the counterpart's `container_id`. |
 | AC-03 | No Duplicate Local Deliveries | A message published by Client A arrives exactly once at Client A and once at Client B under normal healthy operation (verifying publisher does not locally echo before Redis fan-out). |
 | AC-04 | Envelope Schema Compliance | Broadcast events strictly conform to JSON Schema `events-v1.schema.json` with valid UUIDv4 `event_id`, ISO 8601 `sent_at`, matching `time` string, and correct event type. |
 | AC-05 | Dependency Outage & Recovery | Stopping Redis causes both backends to transition `/health` to 503 and reject new sessions; restarting Redis restores `/health` to 200 and restores cross-replica messaging without backend restart. |
-| AC-06 | Replica Replacement & Dynamic Routing | Killing or restarting one backend container causes its connected clients to reconnect; Nginx dynamic DNS upstream resolution routes new connections to the healthy/replacement container without 502 errors. |
-| AC-07 | XSS Immunity & Input Boundary Enforcement | HTML tags, `<script>` payloads, and unicode control characters sent as chat messages render as literal text in the browser DOM. Messages exceeding 2,000 code points or 16 KiB are rejected with close code 1009/1008. |
+| AC-06 | Replica Replacement & Dynamic Routing | Replacing one backend Pod removes it from ready Service endpoints; affected clients retry and establish a new session. Record transient handshake failures and verify eventual cross-replica messaging. |
+| AC-07 | XSS Immunity & Input Boundary Enforcement | HTML and script payloads render as inert text; prohibited C0/DEL controls are rejected. Verify code-point and reassembled-byte limits and the exact API close codes (1008 for application policy, 1009 for transport oversize). |
 | AC-08 | Automated Quality & Security Gate | Pull requests and CI runs must pass linting, contract tests, unit tests, integration tests, and Trivy container vulnerability scanning (zero High/Critical CVEs with fixes) before release builds. |
 | AC-09 | Proven Rollback Rehearsal | An operator or deployment pipeline can roll back an active deployment to the prior recorded release manifest, verifying container image digest replacement and healthy messaging within 10 minutes. |
 | AC-10 | Documented Capacity & Resource Profile | Resource consumption (CPU, memory, file descriptors, network) and latency distributions under candidate load are documented with raw test artifacts. |
-| AC-11 | Clean Infrastructure Teardown | `terraform destroy` successfully removes all provisioned AWS cloud resources with verified zero orphaned volumes, Elastic IPs, or billing leakage. |
+| AC-11 | Clean Infrastructure Teardown | The reviewed Terraform destruction removes workload resources; inventory retained volumes, snapshots, addresses and state explicitly, and recheck delayed billing. |
 | AC-12 | Session Handshake & Subprotocol Verification | Connection negotiation requires subprotocol `chat.v1`. First message received by the client is a valid `session` envelope establishing socket UUID before any broadcasts arrive. |
 | AC-13 | Backpressure & Slow Client Isolation | A simulated slow consumer with suspended read operations does not delay message delivery to healthy peers. The slow consumer's buffer overflows and is cleanly terminated with close code 1013. |
 | AC-14 | Private Diagnostics & Structured Observability | Direct external requests to `/live` and `/metrics` through the gateway are blocked with HTTP 403/404. Internal queries return valid OpenMetrics and JSON health status. Application logs are structured JSON with redacted payloads. |
 | AC-15 | Supply Chain & Manifest Integrity | Release deployments require a cryptographically verified `release.json` manifest matching exact container image SHA-256 digests, configuration hashes, and software bill of materials (SBOM). |
 | AC-16 | Quantitative Performance Target Compliance | Candidate workload evaluated under NFR-01 through NFR-08 with empirical latency percentiles (p50, p95, p99), zero packet/delivery duplication, and verified host memory headroom. |
-| AC-17 | Network Boundary Enforcement | Containers on `edge_network` (gateway, frontend) are incapable of establishing TCP connections to Redis port 6379 on `data_network`. Redis ACLs deny unauthorized commands and channels. |
+| AC-17 | Network Boundary Enforcement | Gateway/frontend Pods cannot connect to Redis through its Service or Pod IP. Backend-to-Redis and DNS work. Redis ACLs deny unauthorized commands/channels; public API/backend/Redis access is blocked. |
 | AC-18 | Subscriber Heartbeat & Generation Nonce | The subscriber loop uses periodic nonce-tagged heartbeats. A stale or stalled subscriber connection fails readiness even if publisher PINGs succeed, preventing silent message loss. |
 
 ## Measurable Engineering Targets
 
-These targets define the quantitative envelope for system acceptance testing under controlled experimental conditions on a single `t3.micro` EC2 instance (1 vCPU, 1 GiB RAM, burstable CPU credits).
+These targets define the quantitative envelope for system acceptance testing under controlled experimental conditions on one measured 2-vCPU/4-GiB EC2 K3s candidate. Include platform overhead and record the exact instance family; no capacity result exists yet.
 
 | ID | Metric / Target | Target Value | Measurement Methodology & Boundary |
 | --- | --- | --- | --- |
@@ -86,8 +86,8 @@ These targets define the quantitative envelope for system acceptance testing und
 | NFR-03 | End-to-End Delivery Latency | p95 < 250 ms, p99 < 1,000 ms | Measured from client send timestamp to recipient receipt timestamp using a single monotonic clock on the external load testing node. |
 | NFR-04 | Message Delivery Reliability | >= 99.9% timely delivery | Expected deliveries = $M \times C$ (messages published $\times$ connected clients). Timely arrival within 2.0s. Zero duplicate event IDs per recipient. |
 | NFR-05 | Dependency Recovery Time | Readiness <= 15s; Client <= 60s | Following Redis restoration: backend `/health` returns 200 within 15s; active-retrying clients re-establish session and receive live messages within 60s. |
-| NFR-06 | Host Resource Headroom | Available RAM >= 256 MiB | Linux `MemAvailable` on host during steady-state baseline run >= 256 MiB. Zero swap thrashing or Linux OOM-killer invocations. |
-| NFR-07 | Graceful Drain Window | 10s drain in 20s stop grace | On SIGTERM, stop new handshakes immediately; close active sockets with code 1012 within 10s; release tasks and Redis resources within 20s. |
+| NFR-06 | Host Resource Headroom | Available RAM >= 512 MiB | Linux `MemAvailable` on host during steady-state baseline run >= 512 MiB. Zero swap thrashing or Linux OOM-killer invocations. |
+| NFR-07 | Graceful Drain Window | 10s drain in 20s Pod termination grace | On SIGTERM, stop new handshakes immediately; close active sockets with code 1012 within 10s; release tasks and Redis resources within 20s. |
 | NFR-08 | Rollback Recovery RTO | Recovery Time <= 10 minutes | Time elapsed from operator rollback invocation to verified functional messaging on the restored release manifest. |
 
 ## Fault Tolerance & Degraded States
@@ -101,7 +101,7 @@ These targets define the quantitative envelope for system acceptance testing und
 | Single Backend    | Sockets on that replica    | Browser detects close code |
 | Crash / Restart   | drop; other replica stays  | 1012 or abnormal drop;     |
 |                   | fully functional.          | reconnects to alternate    |
-|                   | Gateway updates upstream.  | replica with jitter.       |
+|                   | Service endpoints update.  | replica with jitter.       |
 +-------------------+----------------------------+----------------------------+
 | Redis Outage      | Backends detect failed     | Active sessions terminated |
 | (Process stop or  | subscriber heartbeat;      | with code 1011; UI shows   |
@@ -145,7 +145,7 @@ The following capabilities are deliberately excluded from the current single-hos
 - Multi-room routing, channel switching, and direct private messaging.
 - Media/file attachments, audio/video streaming, WebRTC.
 - Durable message storage, historical message querying, and read receipts.
-- Multi-host clustering, Kubernetes/EKS orchestration, AWS ALB/NLB.
+- Multi-host clustering and managed EKS. Single-node K3s is the primary deployment target described in [KUBERNETES.md](KUBERNETES.md), with local k3d testing first.
 - End-to-end client-side message encryption.
 
 ## Related Guides

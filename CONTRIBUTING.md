@@ -11,7 +11,7 @@ The original planning document is historical context. Its snippets are not verif
 ## Documentation Contributions Now
 
 1. Identify the missing detail or contradiction and the affected guides.
-2. Make a focused change that preserves the Docker-only runtime and initial feature scope.
+2. Make a focused change that preserves the containerized Kubernetes application runtime (k3d locally, K3s on AWS) and initial feature scope.
 3. Distinguish an existing design choice from a proposed default or unresolved decision.
 4. Keep local links relative and add a README index entry for a new guide.
 5. Check links, tables, fenced examples and status statements.

@@ -1,107 +1,59 @@
-# Security Plan and Threat Model
+# Security Design
 
-**Status:** Security controls, threat modeling, and container hardening specifications. See the [documentation index](../README.md).
+**Design revision 5 — 2026-10-26. Status: controls to implement and test.** This is an anonymous chat demonstration, not a verified secure production service.
 
-**Design Revision 4 (2026-10-25):** Comprehensive security architecture establishing formal STRIDE threat modeling, strict Content Security Policy Level 3, Linux capability pruning, Redis ACL sandboxing, and OCI cryptographic provenance verification.
+## Threat model
 
----
-
-## STRIDE Threat Modeling & Control Matrix
-
-| STRIDE Category | Threat Scenario | Architectural Mitigation Control | Verification Evidence |
-| --- | --- | --- | --- |
-| **Spoofing** | Attacker spoofs `X-Forwarded-For` or `Origin` headers to bypass rate limits or CORS. | Gateway strips and overwrites client-supplied forwarding headers using `$remote_addr`. Backend validates `Origin` against strict whitelist before ASGI upgrade. | Spoofed header curl probes; rejected origins return HTTP 403. |
-| **Tampering** | Attacker injects HTML/JavaScript into message text to execute XSS in other clients. | DOM updates exclusively use `element.textContent` via `SafeDOM` module; raw HTML tags render as literal strings. Strict CSP blocks inline scripts. | Synthetic XSS payload injection (`<script>`, `<img>`, `svg onload`); zero script execution. |
-| **Repudiation** | User claims they did not send a disruptive broadcast. | Server assigns immutable UUIDv4 `event_id` and UTC timestamp at Redis publish time; structured logs capture correlation ID. | Correlation between server log and client broadcast envelope. |
-| **Information Disclosure** | Public attacker scrapes internal performance counters or Redis credentials via `/metrics` or `/health`. | Gateway explicitly intercepts and drops `/live` and `/metrics` with HTTP 403. Health responses scrub exception traces and connection strings. | External curl to `http://gateway/metrics` returns 403; internal curl returns OpenMetrics. |
-| **Denial of Service** | Malicious client floods 10,000 msgs/s or holds socket write loop open to starve server memory. | Per-socket token bucket (2 msg/s, burst 5), replica publish budget (20 msg/s), and outbound queue caps (32 events / 256 KiB) with 1013 disconnect. | Flood tests trigger close code 1013; memory stays within 192 MiB container ceiling. |
-| **Elevation of Privilege** | Attacker exploits an ASGI or Python vulnerability to gain root execution on the EC2 host. | Backend executes as non-root unprivileged user `chatapp` (UID 10001); drops all Linux capabilities (`cap_drop: [ALL]`); read-only container root. | Container escape attempt fails; `id` returns 10001; root filesystem write fails with EROFS. |
-
----
-
-## Browser Security & Content Security Policy (CSP Level 3)
-
-The Nginx gateway and frontend serve strict HTTP response headers designed to prevent clickjacking, MIME sniffing, and script injection:
-
-```nginx
-# Nginx Gateway Security Headers
-add_header X-Frame-Options "DENY" always;
-add_header X-Content-Type-Options "nosniff" always;
-add_header Referrer-Policy "strict-origin-when-cross-origin" always;
-add_header Permissions-Policy "geolocation=(), camera=(), microphone=(), payment=()" always;
-
-# Strict CSP Level 3: Zero inline code, zero eval, same-origin only
-add_header Content-Security-Policy "default-src 'self'; script-src 'self'; style-src 'self'; connect-src 'self' ws: wss:; img-src 'self' data:; font-src 'self'; object-src 'none'; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
-
-# HSTS: Enforced only on public HTTPS endpoints
-add_header Strict-Transport-Security "max-age=31536000; includeSubDomains; preload" always;
-```
-
----
-
-## Container Security & Linux Capability Pruning
-
-All application containers in production Compose enforce least-privilege runtime security profiles:
-
-```yaml
-# Security Profile Snippet for backend in docker-compose.prod.yml
-security_opt:
-  - no-new-privileges:true
-cap_drop:
-  - ALL
-cap_add:
-  - NET_BIND_SERVICE  # Only if binding to privileged ports (gateway only)
-read_only: true
-tmpfs:
-  - /tmp:rw,noexec,nosuid,size=16m
-user: "10001:10001"
-```
-
-### Security Rationale:
-1. **`cap_drop: [ALL]`:** Strips all 41 Linux capabilities (including `CAP_SYS_ADMIN`, `CAP_NET_ADMIN`, `CAP_CHOWN`), neutralizing kernel privilege escalation attacks.
-2. **`read_only: true`:** Prevents malware persistence by ensuring container root filesystem cannot be modified.
-3. **`no-new-privileges:true`:** Prevents setuid binaries inside the container from gaining elevated privileges.
-
----
-
-## Redis ACL Hardening & Ephemeral Bus Security
-
-The default unauthenticated Redis mode is completely disabled in production. A dedicated, sandboxed application ACL profile is enforced:
-
-```text
-# redis/users.acl
-user default off
-user chatapp on >${REDIS_PASSWORD} ~global_chat_* +ping +publish +subscribe +unsubscribe +client|setname +client|id
-```
-
-### Access Control Rules:
-- **No Key Storage Access:** Commands such as `SET`, `GET`, `KEYS`, `DEL`, and `SCAN` are blocked.
-- **No Administrative Control:** `FLUSHALL`, `CONFIG`, `SHUTDOWN`, and `DEBUG` are blocked and renamed to empty strings.
-- **Channel Scoping:** Publication and subscription are strictly locked to the glob pattern `~global_chat_*`.
-- **Secret Mounting:** Passwords are never committed to Git or passed as plain environment variables; they are injected via Docker secret files (`REDIS_URL_FILE`).
-
----
-
-## Supply Chain Integrity & OCI Attestation Pipeline
-
-1. **Digest Immutability:** Mutable tags (`:latest`) are forbidden in production deployments. All services resolve exact OCI SHA-256 digests (`@sha256:...`).
-2. **Static Vulnerability Scanning:** Automated Trivy scan runs on every build; blocks releases if any `HIGH` or `CRITICAL` vulnerabilities with an available patch exist.
-3. **Software Bill of Materials (SBOM):** Generated in CycloneDX format during CI; attached to release artifacts.
-4. **Cosign Keyless Signatures:** Employs Sigstore Cosign via GitHub Actions OpenID Connect (OIDC) identity to cryptographically verify image provenance before deployment.
-
----
-
-## Secret Rotation Runbook
-
-| Secret Entity | Rotation Procedure | Service Impact |
+| Threat | Required controls | Residual boundary |
 | --- | --- | --- |
-| **Redis Password** | 1. Add secondary user to `users.acl`.<br>2. Update `redis_url.secret` and redeploy backends.<br>3. Remove deprecated user from Redis. | Zero downtime; backend re-establishes connection. |
-| **EC2 Deploy SSH Key** | 1. Generate new Ed25519 keypair.<br>2. Append public key to `/home/ubuntu/.ssh/authorized_keys`.<br>3. Update GitHub Actions secret `EC2_SSH_KEY`.<br>4. Remove old public key. | Zero downtime. |
-| **Let's Encrypt TLS Key** | Automated via `certbot renew` cron; reloads Nginx via `docker exec gateway nginx -s reload`. | Zero connection drops; in-flight WebSockets persist. |
+| Browser script injection | textContent, reviewed CSP, no unsafe HTML rendering | Browser/dependency defects still require review. |
+| Unwanted WebSocket origins | Exact origin allowlist, TLS, handshake validation | Origin is not authentication for non-browser clients. |
+| Resource exhaustion | Admission/rate limits, bounded frames/queues, timeouts, Pod limits | One EC2 node remains a shared bottleneck. |
+| Gateway compromise reaching Redis | Default-deny policies, explicit app paths, Redis ACL | Node/kernel compromise can cross Pod boundaries. |
+| Credential theft | Mounted Secrets, RBAC, encryption at rest, redacted logs | A compromised authorized process can read its own secrets. |
+| Malicious release | Trusted signature identity, digest/hash verification, permitted-kind policy | Signed code can still contain vulnerabilities. |
+| Administrative compromise | MFA, least privilege, restricted SSH/API, credential revocation | The node administrator controls the cluster. |
+| Impersonation/privacy loss | Explicit anonymous labels and no durable history claim | No verified identity or end-to-end encryption. |
 
----
+## Network boundaries
 
-## Related Guides
+Expose only gateway 443 publicly, with 80 enabled only for the chosen redirect/challenge flow. Restrict 22 to approved sources. Keep 6443, backend 8000, Redis 6379 and overlay ports out of public ingress.
 
-[Requirements](REQUIREMENTS.md) | [Architecture](ARCHITECTURE.md) | [Configuration](CONFIGURATION.md) | [CI/CD](CICD.md) | [Operations](OPERATIONS.md)
+Within `chat-app`, default-deny ingress and egress. Allow gateway → frontend/backend; backend → Redis; necessary DNS; public gateway ingress through the actual ServiceLB path; and narrowly authorized diagnostics. Account for node-origin probes and source NAT. Test Pod IP as well as Service IP access, including forbidden gateway/frontend → Redis.
+
+A NetworkPolicy object is useful only when an enforcing controller implements it. Keep the K3s controller enabled and prove denial behavior. See [NetworkPolicy semantics](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
+
+## Pod and identity hardening
+
+Application Pods use non-root users, no privilege escalation, dropped Linux capabilities, RuntimeDefault seccomp and read-only root filesystems where supported. Declare bounded writable emptyDir volumes for Nginx/runtime needs. Listen on unprivileged Pod ports; Services expose public 80/443.
+
+No privileged application containers, host networking, hostPath or container-runtime sockets. Application ServiceAccounts do not automatically mount API tokens. Node/system components have different privileges and need separate review; do not apply an app security profile blindly to K3s system namespaces.
+
+Namespace deployer RBAC permits only the reviewed application operations. Namespace creation, RBAC, Secrets bootstrap and platform administration stay separate. Keep root kubeconfig and server tokens out of CI. Verify effective permissions and prevent deployer creation of workloads that bypass policy.
+
+## Secret handling
+
+Bootstrap K3s with secrets encryption, protect encryption keys and datastore material, and use encrypted EBS. Kubernetes Secret encoding alone is not encryption. [K3s encryption](https://docs.k3s.io/security/secrets-encryption).
+
+Mount Redis URI/ACL and gateway TLS keys as files with restricted access. Keep values out of Git, Terraform user-data, build arguments, release manifests and logs. Private registry access uses a scoped imagePullSecret if required. Document credential issuance, rotation, expiry, recovery and revocation.
+
+Redis has no public endpoint and its default user is disabled. Limit the app ACL to approved commands and exact channels; use channel permissions, not key-pattern permissions. Validate the chosen client handshake commands and heartbeat channel before freezing the ACL.
+
+## Browser and proxy policy
+
+Public traffic uses a valid trusted certificate and WSS. Enforce a reviewed CSP with same-origin scripts/styles and deliberate WebSocket connect destinations. Set content-type, anti-framing and referrer protections; enable HSTS only after the actual HTTPS/domain arrangement is ready.
+
+Gateway overwrites forwarding headers and backend trusts only the expected proxy boundary. Deny public detailed health, liveness and metrics. Sanitize username-bearing access paths and disable payload logging.
+
+Validate raw UTF-8, username syntax, text policy and transport size at the appropriate layers. Apply only the API's newline normalization and boundary trimming; no NFKC transformation. Reject prohibited controls while safely rendering permitted text.
+
+## Supply chain and infrastructure
+
+Pin dependencies with hashes and release images by digest. Scan final artifacts and verify signatures against independently configured trusted identities. Do not execute arbitrary release scripts or grant cluster privileges from an application bundle.
+
+Require IMDSv2, minimal instance role permissions and reviewed Pod access to metadata. Keep Terraform state private/versioned with least-privilege locking access. Never assume `sensitive` outputs remove secrets from state.
+
+## Security acceptance
+
+Prove denied public/internal paths, denied Redis commands/channels, origin enforcement, session-first behavior, safe rendering, finite buffers, secret redaction, signature rejection and RBAC restrictions. Review failures before deployment. Findings and time-limited exceptions require an owner and evidence; no control is marked effective solely because this document describes it.
 

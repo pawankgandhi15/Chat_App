@@ -1,239 +1,99 @@
 # System Architecture
 
-**Status:** Proposed design, incorporating production-grade concurrency, network segmentation, and state machine models. See the [documentation index](../README.md).
+**Design revision 5 — 2026-10-26. Status: design only.** Primary deployment is local k3d and single-node K3s on AWS. [Kubernetes](KUBERNETES.md) owns cluster configuration; [API](API_SPECIFICATION.md) owns the wire contract.
 
-**Design Revision 4 (2026-10-25):** Advanced architectural blueprint establishing asynchronous task trees, multi-tier container networking, generation-nonce subscriber supervision, and deterministic graceful drain protocols.
-
-## High-Level Topology & Network Boundaries
+## Topology
 
 ```mermaid
-flowchart TD
-    Client[Browser Clients] -->|HTTPS :443 / WSS\nHTTP :80 / WS| Gateway[Nginx Reverse Proxy & Ingress Gateway]
-    
-    subgraph Host[AWS EC2 Host: Single t3.micro Node]
-        subgraph EdgeNet[edge_network - Docker Bridge: 172.28.0.0/24]
-            Gateway -->|Round-Robin / Dynamic DNS| Frontend[Nginx Frontend Static Asset Server]
-            Gateway -->|WebSocket Upgrade & Health| BackendA[FastAPI Backend Replica A\nASGI Single Worker]
-            Gateway -->|WebSocket Upgrade & Health| BackendB[FastAPI Backend Replica B\nASGI Single Worker]
-        end
-        
-        subgraph DataNet[data_network - Docker Bridge: Internal: 172.28.1.0/24]
-            BackendA <-->|redis.asyncio Pub/Sub\nAuthenticated ACL| Redis[Redis 7 Server\nIn-Memory Ephemeral Bus]
-            BackendB <-->|redis.asyncio Pub/Sub\nAuthenticated ACL| Redis
-        end
+flowchart LR
+    Browser["Browser: HTTPS / WSS"] --> IGW["Internet Gateway / public EC2 address"]
+    subgraph AWS["AWS VPC · public subnet · one EC2 node"]
+      IGW --> LB["K3s ServiceLB · node 80/443"]
+      subgraph K3s["K3s · containerd · namespace chat-app"]
+        LB --> G["gateway Service → Nginx Pod"]
+        G --> F["frontend Service → static Pod"]
+        G --> BS["backend ClusterIP Service"]
+        BS --> B1["FastAPI Pod 1"]
+        BS --> B2["FastAPI Pod 2"]
+        B1 <--> R["redis Service → Redis Pod"]
+        B2 <--> R
+      end
+      Disk["Encrypted gp3 root · K3s state"]
     end
-
-    classDef external fill:#f9f9f9,stroke:#333,stroke-width:2px;
-    classDef edge fill:#e1f5fe,stroke:#0288d1,stroke-width:2px;
-    classDef data fill:#fff3e0,stroke:#f57c00,stroke-width:2px;
-    class Client external;
-    class Gateway,Frontend,BackendA,BackendB edge;
-    class Redis data;
+    Operator["Terraform operator / CI"] -. AWS APIs .-> AWS
+    Operator -. state + lock .-> S3["Private versioned S3"]
 ```
 
-The runtime deployment consists of **four Compose services operating as five application containers** (`gateway`, `frontend`, `backend` $\times 2$, and `redis`). 
-- **Ingress Isolation:** The gateway is the sole container publishing host ports (`80` for ACME/local testing and `443` for TLS).
-- **Network Segmentation:** Gateway and frontend reside exclusively on `edge_network`. Redis resides strictly on `data_network` (configured with `internal: true`, blocking all external egress). Backend replicas bridge both networks, acting as the strictly controlled application firewall between presentation and data tiers.
+Four Deployments create five steady-state application Pods. Platform Pods are additional. ServiceLB runs on the node; no managed AWS load balancer is involved. Redis is reachable only from backends under the proposed NetworkPolicies. Port 8000 is cluster-private. S3 is outside the message path.
 
-## Component Responsibilities & State Contracts
+A two-backend topology demonstrates distributed fan-out. Node, disk, gateway and Redis are single points of failure. A stopped EC2 node stops the entire application.
 
-| Component | Responsibility | State Lifecycle | Concurrency Model |
-| --- | --- | --- | --- |
-| **Browser Client** | Render DOM via vanilla JS, maintain connection state machine, enforce local rate limits, handle jittered retries. | Ephemeral; last 500 chat messages retained in DOM only. | Single-threaded JavaScript event loop. |
-| **Nginx Gateway** | Ingress TLS termination, HTTP security headers, request routing, WebSocket upgrade proxying, upstream DNS resolution (`127.0.0.11`). | Stateless connection proxy; maintains active TCP connection tables. | Event-driven multi-worker epoll. |
-| **Nginx Frontend** | Serve static assets (`index.html`, `app.js`, `styles.css`) with strict caching and compression (gzip). | Immutable container image assets. | High-concurrency static file serving. |
-| **FastAPI Backend (x2)** | Protocol negotiation (`chat.v1`), admission control, input validation, local connection management, Redis publication, and subscriber fan-out. | In-memory connection slots, bounded client delivery queues, subscriber generation counter. | Python 3.11+ `asyncio` event loop on single Uvicorn worker per replica. |
-| **Redis Bus** | Distribute broadcast envelopes across backend replicas via `global_chat_channel`. | Ephemeral in-memory Pub/Sub channel; zero disk persistence (RDB/AOF disabled). | Single-threaded in-memory command execution. |
+## Request and session lifecycle
 
----
+1. Browser loads static assets through the TLS gateway and selects an anonymous display name.
+2. It connects to `/ws/{username}` with subprotocol `chat.v1`.
+3. Gateway forwards the upgrade to the backend Service. Only ready backend endpoints receive new connections.
+4. Backend checks origin, username, dependency readiness and capacity; reserves admission before accepting.
+5. One writer emits a private `session` event first. No Redis broadcast may overtake it.
+6. After session initialization, a join event is published. The browser enables sending only after validating the session.
+7. Accepted client text is normalized, bounded and wrapped in a server event before publication.
+8. Every backend consumes Redis events and enqueues them to local clients. The publisher does not also echo locally.
 
-## Detailed Message & Protocol Sequences
+Display names are not authentication. The session UUID identifies this socket, but broadcast events do not include a sender connection UUID; the UI must not infer verified ownership from a matching name.
 
-### Sequence 1: Client Admission, Subprotocol Handshake & Session Inception
+## State ownership
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Client as Browser Client
-    participant GW as Nginx Gateway
-    participant Backend as FastAPI Backend (Replica A)
-    participant Redis as Redis Pub/Sub
+| State | Owner | Lifetime / loss behavior |
+| --- | --- | --- |
+| Draft, view state, up to 500 rendered events | Browser tab | Draft preserved on reconnect; missed events cannot be recovered. |
+| Socket identity, queue, writer, rate bucket | One backend process | Lost on process exit; rebuilt on a new session. |
+| Publisher budget and connection pool | One backend process | Local resource limits, not global tenant quotas. |
+| Broadcast stream | Redis Pub/Sub | No persistence, acknowledgment or historical replay. |
+| Kubernetes desired state and Secrets | K3s datastore | Separate from message data; protected and recoverable through platform procedures. |
+| Infrastructure state | Private S3 backend | Sensitive metadata; versioned and independently protected. |
 
-    Client->>GW: GET /ws/User_123 (Upgrade: websocket, Sec-WebSocket-Protocol: chat.v1)
-    GW->>Backend: Proxy Upgrade (X-Forwarded-For, X-Real-IP, Host)
-    
-    critical Pre-Upgrade Admission Gate
-        Backend->>Backend: Validate Origin against ALLOWED_ORIGINS
-        Backend->>Backend: Validate Username regex ^[A-Za-z0-9_-]{1,32}$
-        Backend->>Backend: Check Capacity (Active Sockets < MAX_CONNECTIONS)
-        alt Policy Failure / Capacity Exceeded
-            Backend-->>GW: HTTP 403 Forbidden / HTTP 503 Service Unavailable
-            GW-->>Client: HTTP 403 / 503 Denial
-        end
-    end
+## Backend concurrency
 
-    Backend-->>GW: HTTP 101 Switching Protocols (Sec-WebSocket-Protocol: chat.v1)
-    GW-->>Client: HTTP 101 Switching Protocols
+Each Pod runs one Uvicorn worker. A process owns a subscriber supervisor, publisher pool and session registry. A session owns receive and writer tasks plus a bounded outbound queue. The subscriber enqueues without waiting for socket writes.
 
-    rect rgb(232, 245, 233)
-        Note over Backend,Client: Private Connection Inception (Bypasses Redis)
-        Backend->>Backend: Allocate Connection Slot & UUID (e.g. 5b2420aa...)
-        Backend->>Client: Send Local 'session' Event (connection_id, container_id, user)
-        Client->>Client: Enable UI Send Input; Transition to CONNECTED state
-    end
+Queue bounds apply to both event count and encoded bytes. On overflow or a send timeout, close the affected session with 1013 and release accounting exactly once. Cancellation and cleanup must be idempotent across disconnect, timeout, drain and dependency failure.
 
-    rect rgb(255, 243, 224)
-        Note over Backend,Redis: Advisory Broadcast Join
-        Backend->>Redis: PUBLISH global_chat_channel (system join event)
-        Redis-->>Backend: Fan-out to all subscribed replicas
-    end
-```
+Publisher timeouts can have ambiguous outcomes. Do not blindly retry and duplicate an event. Redis Pub/Sub is at-most-once; the healthy test target is a measurement, not a delivery guarantee during faults.
 
-### Sequence 2: Real-time Message Publication & Distributed Fan-Out
+## Health and termination
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Alice as Alice (Client 1)
-    participant RepA as Backend Replica A
-    participant Redis as Redis Pub/Sub
-    participant RepB as Backend Replica B
-    actor Bob as Bob (Client 2)
+`/live` checks event-loop responsiveness. `/health` checks publisher connectivity, acknowledged subscription, subscriber heartbeat freshness and drain state. Send nonce-tagged subscriber probes every 5s; fail readiness after 10s staleness. A successful publisher PING does not establish subscriber health.
 
-    Alice->>RepA: Plain Text Frame: "Hello distributed world!"
-    
-    critical Ingress Validation & Accounting
-        RepA->>RepA: Check Socket Token Bucket (Rate Limit)
-        RepA->>RepA: Validate Reassembled Length (<= 16 KiB, <= 2,000 code points)
-        RepA->>RepA: Check Replica Shared Publication Token Bucket
-    end
+On dependency failure, reject new sessions and terminate affected sockets with 1011. Reconnect the subscriber using bounded backoff and a fresh generation nonce; restore readiness only after the new subscription and probe are confirmed.
 
-    RepA->>RepA: Construct Event Envelope (UUIDv4 event_id, ISO 8601 sent_at, container_id)
-    RepA->>Redis: PUBLISH global_chat_channel (serialized JSON)
-    
-    par Redis Fan-out to Replica A
-        Redis-->>RepA: Redis Pub/Sub Message Delivered
-        RepA->>RepA: Parse JSON & Push to Alice's Queue (Bounded: 32 events)
-        RepA->>Alice: WS Frame: JSON Chat Envelope (Echo confirmation)
-    and Redis Fan-out to Replica B
-        Redis-->>RepB: Redis Pub/Sub Message Delivered
-        RepB->>RepB: Parse JSON & Push to Bob's Queue (Bounded: 32 events)
-        RepB->>Bob: WS Frame: JSON Chat Envelope
-    end
-```
+On planned termination, stop admission and fail readiness, then close active sockets with 1012 and drain within 10s. Complete cleanup within the 20s Pod grace, including any preStop hook. Verify signal ordering with the selected server implementation. Endpoint removal can race with connection attempts; clients must handle failed handshakes.
 
-### Sequence 3: Graceful Drain & Container Shutdown Protocol
+## Network and trust boundaries
 
-```mermaid
-sequenceDiagram
-    autonumber
-    actor Client as Connected Browser
-    participant GW as Nginx Gateway
-    participant Backend as FastAPI Backend
-    participant Redis as Redis Pub/Sub
-    actor Docker as Docker Daemon / Host
+- Public: gateway HTTPS/WSS; HTTP only for redirect or a deliberate certificate challenge arrangement.
+- Cluster: gateway to frontend/backend, backends to Redis, required DNS and authorized diagnostics.
+- Administration: restricted SSH and node-local kubectl; no public API, Redis or backend ports.
+- Release: verified digests/configuration from GHCR and a signed release bundle; namespace-scoped deployer.
+- Secrets: mounted files, encryption at rest and restricted access. Kubernetes manifests in Git contain references, not credentials.
 
-    Docker->>Backend: SIGTERM Signal (Container Stop Grace Period = 20s)
-    Backend->>Backend: State -> DRAINING; Set /health -> 503 Service Unavailable
-    Backend->>GW: Health Probe returns 503 (Gateway ceases new upstream routing)
-    
-    rect rgb(255, 235, 238)
-        Note over Backend,Client: Drain Active WebSocket Sockets (10s Budget)
-        Backend->>Client: WS Close Frame: Code 1012 (Service Restart)
-        Client->>Client: Transition to RECONNECTING; Delay Jittered Reconnect to GW
-        Backend->>Backend: Cancel & Await Outbound Socket Writer Tasks
-    end
+Nginx uses Service DNS/ClusterIPs; Kubernetes updates backend endpoints as Pods change. Do not carry forward Docker's `127.0.0.11` resolver or bridge-network names. Recreating a Service can change its ClusterIP and requires gateway resolution/reload verification.
 
-    rect rgb(238, 238, 238)
-        Note over Backend,Redis: Release Shared Data Resources
-        Backend->>Redis: Unsubscribe from global_chat_channel
-        Backend->>Redis: Close Pub/Sub Connection & Publisher Pool
-        Backend->>Backend: Cancel Subscriber Task & Supervisor Coroutines
-    end
+## Failure expectations
 
-    Backend-->>Docker: Process Exit 0 (Completed cleanly within 10s < 20s grace)
-```
+| Failure | Expected behavior | Limitation |
+| --- | --- | --- |
+| One backend removed | Remaining ready Pod serves new sessions; affected clients retry. | Existing sockets on the removed Pod are lost. |
+| Redis lost | Readiness fails; sessions close; subscriber recovers after restoration. | Events during outage are lost. |
+| Slow browser | Its writer/queue is bounded and disconnected. | Host-level congestion can still affect peers. |
+| Gateway restarted | Connections reconnect after gateway returns. | Singleton gateway has an interruption. |
+| Node lost | Rebuild infrastructure/platform and deploy verified release. | No automatic cross-node failover. |
+| Bad release | Restore complete prior bundle and verify messaging. | Rollback is a sequence, not a multi-resource atomic transaction. |
 
----
+## Acceptance boundary
 
-## Asynchronous Task Tree & Concurrency Model
+Validate the 25-client, 5-message/s experiment and recovery objectives in [requirements](REQUIREMENTS.md). Collect node and Pod measurements, including rollout peaks. [Testing](TESTING.md), [deployment](DEPLOYMENT.md) and [operations](OPERATIONS.md) define the evidence needed before claiming success.
 
-Each FastAPI backend replica operates under a strictly hierarchical `asyncio` task architecture rooted in the application `lifespan`:
+## Detailed design and future changes
 
-```
-FastAPI Lifespan (Root Context)
-│
-├── DependencySupervisorTask (Monitors Redis health, ticks heartbeats every 5s)
-│   └── Maintains active subscriber connection generation (int nonce)
-│
-├── RedisSubscriberTask (Dedicated persistent connection to Redis)
-│   ├── Subscribes to `global_chat_channel`
-│   └── On event: Deserializes once -> Enqueues to ConnectionManager local client queues
-│
-└── ConnectionManager (Registry of Active Sockets: Map[UUID, ClientSession])
-    │
-    └── ClientSession (Per Admitted WebSocket Connection)
-        ├── SocketReaderTask (Reads incoming WS frames, parses text, dispatches publish)
-        ├── SocketWriterTask (Pulls from asyncio.Queue[Event], serializes, sends WS frame)
-        └── OutboundQueue (asyncio.Queue, maxsize=32 events, byte ceiling=256 KiB)
-```
-
-### Invariants of the Task Tree:
-1. **Single Writer Ownership:** Only the `SocketWriterTask` ever calls `websocket.send_text()`. Broadcast handlers never perform direct I/O on client sockets, eliminating concurrency races on the underlying transport buffer.
-2. **Cancellation Propagation:** If either `SocketReaderTask` or `SocketWriterTask` terminates or encounters an exception, it signals the parent `ClientSession`, which atomically cancels the sibling task, frees the connection slot, and decrements active connection gauges.
-3. **Shielded Teardown:** Cleanup handlers are wrapped in `asyncio.shield()` with strict 2-second timeouts to guarantee that OS socket descriptors and capacity slots are reclaimed even during abrupt client disconnections.
-
----
-
-## Dynamic Upstream Resolution & Network Topology
-
-Docker's internal DNS server (`127.0.0.11`) assigns dynamic internal IP addresses to containers upon creation or restart. To prevent Nginx from caching stale container IPs indefinitely when a backend replica is recreated:
-
-```nginx
-# Gateway Upstream Dynamic Resolution Configuration
-resolver 127.0.0.11 valid=5s ipv6=off;
-
-upstream backend_cluster {
-    zone backend_zone 64k;
-    server backend:8000 resolve;
-}
-
-upstream frontend_cluster {
-    zone frontend_zone 64k;
-    server frontend:80 resolve;
-}
-```
-
-- **Shared Memory Zones (`zone`):** Open-source Nginx 1.27.3+ supports upstream dynamic DNS resolution via the `resolve` directive when paired with an upstream shared-memory `zone`.
-- **Cache Invalidation:** Upstream DNS answers expire after 5 seconds (`valid=5s`), ensuring that within 5 seconds of container replacement, the gateway routes traffic to the new IP address.
-- **Failover Buffering:** During the 5-second discovery window, `proxy_next_upstream error timeout http_502 http_503` ensures in-flight handshakes reaching a terminated container are immediately retried against the surviving replica before HTTP 101 upgrade completion.
-
----
-
-## Memory Bounds & Backpressure Mathematical Model
-
-On an AWS `t3.micro` instance with 1 GiB total physical RAM, memory exhaustion is the primary failure mode. The architecture defines a deterministic mathematical memory ceiling per backend replica:
-
-$$\text{Memory}_{\text{peak}} = \text{Base}_{\text{runtime}} + N_{\text{max}} \times \left( Q_{\text{events}} \times S_{\text{event\_max}} + B_{\text{socket\_in}} + B_{\text{socket\_out}} \right) + P_{\text{redis\_buffers}}$$
-
-Where configured parameters are:
-- $\text{Base}_{\text{runtime}} \approx 45\text{ MiB}$ (Python runtime, FastAPI, Uvicorn, loaded libraries).
-- $N_{\text{max}} = 64$ (Maximum concurrent admitted sockets per replica).
-- $Q_{\text{events}} = 32$ (Maximum queued events in client outbound queue).
-- $S_{\text{event\_max}} = 16\text{ KiB}$ ($16,384\text{ bytes}$ maximum serialized event envelope).
-- $B_{\text{socket\_in}} = 16\text{ KiB}$ (Incoming reassembly frame buffer).
-- $B_{\text{socket\_out}} = 16\text{ KiB}$ (Kernel socket output buffer headroom).
-- $P_{\text{redis\_buffers}} \approx 8\text{ MiB}$ (Redis publisher connection pool + subscriber client buffer).
-
-$$\text{Memory}_{\text{payload\_exposure}} = 64 \times (32 \times 16\text{ KiB} + 32\text{ KiB}) = 64 \times (512\text{ KiB} + 32\text{ KiB}) = 34.8\text{ MiB}$$
-
-$$\text{Memory}_{\text{peak\_candidate}} = 45\text{ MiB} + 35\text{ MiB} + 8\text{ MiB} \approx 88\text{ MiB}$$
-
-With a Docker container memory ceiling of `192 MiB` per backend replica, the system operates with a safety factor of $> 2.0\times$ above the maximum theoretical payload exposure, guaranteeing zero OOM kills under full queue saturation.
-
----
-
-## Related Guides
-
-[Requirements](REQUIREMENTS.md) | [API Specification](API_SPECIFICATION.md) | [Configuration](CONFIGURATION.md) | [Testing](TESTING.md) | [Operations](OPERATIONS.md)
+The [system design handbook](design/README.md) collects HLD, LLD, sequence diagrams, data/protocol considerations, capacity planning and staged architecture upgrades. Use its migration playbook and proposal/ADR templates before changing the selected topology or introducing new product contracts.
 

@@ -1,6 +1,6 @@
 # Backend Technology and Engineering Guide
 
-**Status:** Specification for future implementation; no backend, tests or deployment have been implemented. Created 2026-10-26.
+**Status:** Specification for future implementation; no backend, tests or deployment have been implemented. Updated for design revision 5 on 2026-10-26; primary runtime is Kubernetes.
 
 This guide consolidates backend technologies, service boundaries, protocol handling, data flow, concurrency, validation, security, observability and delivery requirements. Read it with the [frontend guide](FRONTEND.md). It describes an anonymous, single-room demonstration on one host; two replicas do not provide host-level high availability.
 
@@ -24,7 +24,7 @@ There is no user database, login service, message-history API, durable queue or 
 | `hiredis` | Optional accelerated Redis parsing | Retain only if compatible and useful in measured tests. |
 | Structured logging / metrics client | Operational evidence | Redacted JSON logs and bounded-cardinality private metrics. |
 | pytest, pytest-asyncio, HTTPX, Hypothesis | Unit, HTTP, property and lifecycle checks | Execute tests in the project's containerized harness; use real Redis for integration. |
-| Docker, Compose and Nginx gateway | Packaging, replicas and ingress | Reviewed image locks, private backend port, limits and WebSocket proxying. |
+| OCI images, K3s and Nginx gateway | Packaging, replicas and ingress | Reviewed image locks, private backend port, limits and WebSocket proxying. |
 
 See [technologies](TECHNOLOGIES.md) for earlier candidate pins. No lockfile or compatibility run exists yet; resolve FastAPI/Starlette/Uvicorn/transport versions together and recheck supported patches before implementation. The metrics, property-test and browser-test packages still need explicit dependency selection and locks.
 
@@ -45,7 +45,7 @@ flowchart LR
     B -->|Local socket queues| BrowserB[Clients on B]
 ```
 
-The backend listens on container port 8000 and joins both `edge_network` and `data_network`. Redis listens on 6379 only within the internal data network; gateway and frontend do not join that network. The gateway alone publishes application ports 80/443 on the host.
+The backend listens on Pod port 8000 behind a ClusterIP Service. Redis listens on 6379 behind its own ClusterIP Service. Default-deny NetworkPolicies allow gateway-to-backend and backend-to-Redis while denying gateway/frontend-to-Redis. K3s ServiceLB exposes only gateway application ports 80/443 on the node.
 
 A WebSocket remains attached to its selected backend until it closes. Redis removes the need to deliver all senders to the same replica; it does not migrate an open socket. Reconnection establishes a new session and may select either replica. No sticky-session dependency is needed for the baseline.
 
@@ -53,7 +53,7 @@ A WebSocket remains attached to its selected backend until it closes. Redis remo
 
 | Interface | Exposure | Responsibility |
 | --- | --- | --- |
-| `GET /health` | Gateway/public and internal | 200 only while dependency-aware readiness is satisfied; otherwise 503. |
+| `GET /health` | Internal; gateway denies public access | Kubernetes readiness: 200 only while dependency-aware readiness is satisfied; otherwise 503. |
 | `GET /live` | Internal; gateway denies public access | Event-loop liveness independent of Redis. |
 | `GET /metrics` | Internal; gateway denies public access | Scrapeable operational measurements. |
 | `/ws/{username}` | Public through gateway | Mandatory `chat.v1`, origin validation, admission and live text messaging. |
@@ -76,12 +76,13 @@ The [API specification](API_SPECIFICATION.md) owns exact schemas, frame/field va
 | --- | --- |
 | `backend/app/main.py` | Construct FastAPI app, register routes and wire dependencies. |
 | `settings.py` | Parse startup settings, secret-file references and relational constraints. |
-| `protocol.py` | Normalize input, validate names, build/validate typed envelopes and serialize events. |
-| `lifecycle.py` | STARTING/READY/DEGRADED/DRAINING state, dependency supervision and cleanup. |
+| `validation.py` | Normalize input and validate names/text using the API rules. |
+| `protocol.py` | Build/validate typed envelopes and serialize events. |
+| `health.py` | Readiness/liveness snapshots from process lifecycle and subscriber state; lifecycle wiring belongs to `main.py`. |
 | `limits.py` | Monotonic token buckets, admission reservations and bounded accounting. |
-| `manager.py` | Local session registry, per-client queues, writers and idempotent disconnect. |
-| `messaging.py` | Publisher pool, subscriber generation, reconnect and heartbeat handling. |
-| `observability.py` | Redacted logging and metrics with bounded label sets. |
+| `sessions.py` | Local session registry, per-client queues, writers and idempotent disconnect. |
+| `broker.py` | Publisher pool, subscriber generation, reconnect and heartbeat handling. |
+| `telemetry.py` | Redacted logging and metrics with bounded label sets. |
 
 Keep these layers independently testable. Routes orchestrate validation and session work; they do not embed Redis retry loops or manipulate arbitrary metrics globals. Inject Redis adapters, monotonic clocks and UUID/time providers where deterministic tests require them.
 
@@ -127,13 +128,13 @@ The [configuration reference](CONFIGURATION.md) owns environment-variable names,
 | `SEND_TIMEOUT_SECONDS` | 2 seconds | Disconnect a slow consumer without blocking peers. |
 | `REDIS_COMMAND_TIMEOUT_SECONDS` | 1 second | Bound publication/readiness waits. |
 | `SUBSCRIBER_HEARTBEAT_SECONDS` / `SUBSCRIBER_STALE_SECONDS` | 5 / 10 seconds | Require heartbeat interval below stale threshold; account for command/probe delays. |
-| `SHUTDOWN_DRAIN_SECONDS` / container stop grace | 10 / 20 seconds | Allow cleanup before forced termination. |
-| Backend container memory | 192 MiB each | Candidate deployment cap; measure real RSS, buffers and OOM behavior. |
-| Redis container memory | 64 MiB | Includes Redis overhead and client buffers; `maxmemory` is not a process RSS cap. |
+| `SHUTDOWN_DRAIN_SECONDS` / Pod termination grace | 10 / 20 seconds | Allow cleanup before forced termination. |
+| Backend container memory | 256 MiB each | Candidate deployment cap; measure real RSS, buffers and OOM behavior. |
+| Redis container memory | 128 MiB | Includes Redis overhead and client buffers; `maxmemory` is not a process RSS cap. |
 
 Also validate `APP_ENV`, `RELEASE_ID`, `ALLOWED_ORIGINS`, `CHANNEL_NAME` and the environment-appropriate Redis credential source. Never print the resolved Redis URI. Choose and document an explicit publisher pool limit and transport buffering/ping configuration before implementation; do not inherit unreviewed library defaults.
 
-The aggregate proposed application-container caps sum to 528 MiB. This arithmetic does not guarantee host memory headroom: kernel, Docker, Redis buffers, connection overhead, image extraction and deployment activity must be measured.
+The proposed application memory limits sum to 752 MiB. Requests and limits are defined in [Kubernetes](KUBERNETES.md). OS, K3s, system Pods, Redis buffers, image operations and rollout peaks must also be measured.
 
 ## 9. Redis Semantics, Readiness and Recovery
 
@@ -153,20 +154,20 @@ Queue admission must check event count and serialized UTF-8 byte count together.
 
 On SIGTERM, transition to DRAINING, return readiness 503 and reject fresh admission. Close existing sockets with `1012` within the drain budget, cancel/await session tasks, close Redis subscriber/publisher resources, and stop background supervision before the container grace window ends. Cleanup must be bounded and idempotent; do not shield it indefinitely from cancellation.
 
-An open-source Nginx upstream does not automatically become an active `/health` polling load balancer merely because the route exists. Keep backend admission self-protecting and test the selected passive failure/routing strategy during replacement. Avoid promising that an existing WebSocket can be transparently handed to another replica. See [Nginx passive and active health checks](https://docs.nginx.com/nginx/admin-guide/load-balancer/http-health-check/).
+Kubernetes readiness probes control backend Service endpoints. Nginx proxies to that Service rather than tracking individual Pod names. Endpoint removal can race with incoming connections, so backend admission stays self-protecting. Test termination signal ordering and reconnect behavior; existing WebSockets cannot migrate to another Pod.
 
 ## 11. Security and Privacy
 
 | Boundary | Required control |
 | --- | --- |
 | Browser → gateway | HTTPS/WSS for public use, reviewed headers and handshake limits. |
-| Gateway → backend | Private container routing; overwrite forwarding headers and restrict trusted proxy handling. |
+| Gateway → backend | ClusterIP routing and enforced NetworkPolicies; overwrite forwarding headers and restrict trusted proxy handling. |
 | Backend → Redis | Secret-mounted credentials, minimal ACL commands and allowed Pub/Sub channels. |
 | Container → host | Non-root runtime, read-only filesystem where feasible, dropped capabilities, no Docker socket and bounded writable paths. |
 | Build → deployment | Reviewed dependency locks, scanned digest-pinned images and release verification. |
 | App → logs/metrics | No message bodies, credentials, full username-bearing request paths or unbounded per-user labels. |
 
-Redis ACL channel patterns are distinct from key patterns. Review the current illustrative ACL against the selected Redis version before use; grant only the exact channel pattern and commands needed for publication, subscription and probes. See [Redis ACL rules](https://redis.io/docs/latest/operate/oss_and_stack/management/security/acl/). Replace example passwords with generated secrets. Also leave sufficient process headroom below the Redis cgroup cap rather than assuming `maxmemory 64mb` fits inside a 64 MiB container.
+Redis ACL channel patterns are distinct from key patterns. Review the current illustrative ACL against the selected Redis version before use; grant only the exact channel pattern and commands needed for publication, subscription and probes. See [Redis ACL rules](https://redis.io/docs/latest/operate/oss_and_stack/management/security/acl/). Replace example passwords with generated secrets. Also leave sufficient process headroom below the Redis cgroup cap and test the candidate 48 MiB maxmemory setting inside the 128 MiB container limit.
 
 TLS transport protection does not provide end-to-end message encryption or verified user identity. Follow the [security guide](SECURITY.md) for secret rotation, release signing and incident response.
 
@@ -176,7 +177,7 @@ Expose connection, accepted/rejected message, publication, delivery, queue press
 
 Log structured lifecycle outcomes and timings. If event IDs are logged for correlation, control access and retention without adding message content. Disable or sanitize default access logs where `/ws/{username}` would otherwise record identifiers. Keep stack traces and secret-bearing exception data out of public responses.
 
-Readiness should report useful diagnostics to authorized operators while avoiding credential or configuration leakage. A public `/health` response requires deliberate review of the detailed example in the API guide; do not expose private diagnostics through `/metrics` or `/live` at the gateway.
+Readiness should report useful diagnostics to authorized operators while avoiding credential or configuration leakage. Keep detailed `/health`, `/metrics` and `/live` cluster-private; the gateway blocks these routes. Any separate public status response must be minimal and explicitly reviewed.
 
 Frontend UX depends on consistent close codes, session-first ordering and honest delivery semantics. Operators need health, queue pressure and Redis subscriber evidence to distinguish a dependency failure from a slow client. See [operations](OPERATIONS.md).
 
@@ -190,11 +191,11 @@ Frontend UX depends on consistent close codes, session-first ordering and honest
 | Failure/recovery | Redis loss, stalled subscriber, stale generation probe, ambiguous publish timeout, replica replacement and graceful shutdown. |
 | Resource/adversarial | Concurrent admission race, fragmented oversized input, binary frames, slow-reader isolation, cancellation leaks and finite buffering. |
 | Deployment | Public diagnostics blocked, digest/manifest verification, synthetic messaging check and rollback rehearsal. |
-| Performance | Reproducible candidate load, latency distributions, delivery gaps/duplicates, CPU credits, RSS and host headroom. |
+| Performance | Reproducible candidate load, latency distributions, delivery gaps/duplicates, instance-family CPU behavior, RSS and host headroom. |
 
-Use the requirements' current candidate experiment: 25 concurrent clients, 5 aggregate messages/second, 512-byte payloads, a 2-minute warmup and 30-minute steady interval. Targets are p95 below 250 ms, p99 below 1,000 ms, at least 99.9% timely delivery under the defined healthy run, and host `MemAvailable` of at least 256 MiB. The 64-connection admission default is separate from that tested workload. These are unverified objectives, not capacity claims.
+Use the requirements' current candidate experiment: 25 concurrent clients, 5 aggregate messages/second, 512-byte payloads, a 2-minute warmup and 30-minute steady interval. Targets are p95 below 250 ms, p99 below 1,000 ms, at least 99.9% timely delivery under the defined healthy run, and host `MemAvailable` of at least 512 MiB. The 64-connection admission default is separate from that tested workload. These are unverified objectives, not capacity claims.
 
-Record environment, exact dependencies/image digests, CPU credit mode, configuration, raw measurements and failures. An in-memory mock cannot prove Redis delivery or ASGI transport behavior. Test in containers and retain evidence using the [testing plan](TESTING.md) and [release checklist](RELEASE_CHECKLIST.md).
+Record environment, exact dependencies/image digests, instance performance configuration, configuration, raw measurements and failures. An in-memory mock cannot prove Redis delivery or ASGI transport behavior. Test in containers and retain evidence using the [testing plan](TESTING.md) and [release checklist](RELEASE_CHECKLIST.md).
 
 ## 14. Implementation Order and Unresolved Details
 
@@ -206,7 +207,7 @@ Record environment, exact dependencies/image digests, CPU credit mode, configura
 6. Integrate the frontend/gateway and prove normal, failure and load behavior.
 7. Package verified images and complete the deployment/rollback evidence.
 
-Existing guides contain conflicting summaries: some mention 100 clients or 50 per replica while the requirements' NFR table defines 25 clients for the experiment and configuration defines a 64-per-replica ceiling. Some prose also mentions Unicode NFKC while the API lists only newline normalization and ASCII boundary trimming. Follow the authoritative owner for each concern and reconcile those summaries before claiming implementation conformance.
+Revision 5 aligns the workload target at 25 clients, admission ceiling at 64 per replica, retry limit at 10 and node headroom at 512 MiB. Apply only the API's newline normalization and ASCII boundary trimming; do not add NFKC.
 
 Other prerequisites include a tested denial-capable ASGI transport, correct Redis channel ACL syntax, a safe Redis memory/buffer envelope, an explicit publication-timeout policy and a deployment runner with permitted network access. Documentation of these decisions does not establish that the implementation or security review has passed.
 

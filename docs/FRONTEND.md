@@ -20,7 +20,7 @@ The baseline has one screen and one global conversation. Accounts, room switchin
 | Browser WebSocket API | Persistent connection and event transport | Same-origin `/ws/{username}` using `chat.v1`. |
 | Browser URL, encoding and date APIs | Safe endpoint construction, UTF-8 size checks and timestamp presentation | Use platform functionality rather than adding dependencies for these tasks. |
 | Nginx static server | Deliver HTML, CSS and JavaScript | Frontend container behind the separate gateway. |
-| Docker / Compose | Reproducible serving and integration | Frontend joins `edge_network`; gateway publishes application ports. |
+| OCI images / Kubernetes | Reproducible serving and integration | Frontend has a ClusterIP Service; only the gateway is public. Local testing uses k3d. |
 | Browser automation and accessibility tooling | Verify behavior across browsers and assistive technology | Select and pin a runner at implementation; Playwright and axe-core are candidate development tools. |
 
 The baseline needs no Node.js runtime, React, backend template rendering, CDN scripts or client secrets. A future test toolchain can have development dependencies without adding them to the shipped frontend. Review actual dependency/image versions and browser support when implementing; the version table in [technologies](TECHNOLOGIES.md) is design input, not evidence of a tested lockfile.

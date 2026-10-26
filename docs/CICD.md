@@ -1,196 +1,56 @@
-# CI/CD Design and Pipeline Specification
+# Continuous Integration and Delivery
 
-**Status:** Pipeline architecture, workflow specifications, and supply chain security controls. See the [documentation index](../README.md).
+**Design revision 5 — 2026-10-26. Status: workflow specification only.** GitHub Actions files, images and release tooling remain to be implemented.
 
-**Design Revision 4 (2026-10-25):** Production-grade GitHub Actions pipeline architecture, Trivy container security gates, CycloneDX SBOM generation, Cosign keyless provenance signing, and cryptographically verified release manifests.
+## Pipeline stages
 
----
+| Stage | Checks and outputs | Credentials |
+| --- | --- | --- |
+| Pull request | Docs/links, lint, unit/property tests, schema tests, overlay render, security-policy checks | Read-only repository permissions; no AWS or deployment secrets. |
+| Local-cluster integration | Pinned k3d/K3s; application images; browser and cross-replica tests; network/fault checks | Ephemeral test-only credentials. |
+| Release build | Build once, test final images, scan, generate SBOM and provenance | Minimal GHCR write access for trusted release workflow. |
+| Sign and package | Record immutable digests and rendered config hashes; sign image/bundle evidence | Scoped GitHub OIDC identity, no long-lived signing key by default. |
+| Deploy | Verify bundle, preflight, apply, wait, functional checks, restore on failure | Restricted deployment identity and approved network route. |
+| Record | Publish sanitized evidence and accepted/failed/restored status | Limited artifact permissions. |
 
-## Pipeline Architecture & Trust Boundaries
+Never expose privileged release/deployment credentials to untrusted pull-request code. Pin third-party Actions by reviewed commit. Separate PR checks, image publication, infrastructure changes and application deployment.
 
-```
-[Pull Request Event]
-  └── test.yml: Lint (Ruff), Type Check (Mypy), Contract & Unit Tests (Docker)
-      └── Zero access to production secrets / credentials
+## Quality gates
 
-[Push to main Event]
-  └── build.yml: Buildx (linux/amd64) -> Trivy Scan -> CycloneDX SBOM -> Cosign Sign -> Push Registry
-      └── Emits immutable release artifacts (@sha256 digest) & release.json
+Lint Python/JavaScript and manifests. Run API-contract and lifecycle tests against the real ASGI/Redis transport, not only mocks. Validate both Kustomize overlays against the selected Kubernetes version. Reject plaintext secrets, mutable AWS image tags, missing limits, public backend/Redis exposure and privileged app Pods.
 
-[Manual / Release Dispatch Event]
-  └── deploy.yml (Target: Production Environment Gate)
-      └── SSH to EC2 -> Host Lock (flock) -> Pull Digests -> Atomic Symlink Swap -> Verify Health
-```
+Scan dependencies and final images. Fixed High/Critical findings block release unless an explicit, time-limited exception records owner, justification and mitigation. Signing establishes artifact identity; it does not establish absence of vulnerabilities.
 
----
+Run the full 30-minute load experiment on the selected AWS candidate before a capacity claim. A shared CI runner's result is not a cloud performance measurement.
 
-## Production GitHub Actions Workflows
+## Release manifest fields
 
-### 1. Pull Request Validation Workflow (`.github/workflows/test.yml`)
+| Field | Required meaning |
+| --- | --- |
+| schema_version / release_id / source_commit | Versioned manifest and immutable source identity. |
+| created_at / target_architecture | Build timestamp and supported target, initially linux/amd64. |
+| images | Gateway, frontend, backend and Redis repository@sha256 references. |
+| configuration | Hashes of rendered manifests and non-secret configuration. |
+| secrets_required | Secret names and compatibility versions; no values. |
+| platform_compatibility | Tested K3s/Kubernetes version and required features. |
+| attestations | SBOM, provenance and expected signature-verification policy. |
+| evidence | Links to quality, integration, policy and rollback results. |
 
-```yaml
-name: "PR Validation & Test"
+Use deterministic serialization and explicit schema validation. A manifest cannot establish its own trust by embedding an arbitrary signer; the verifier's trusted policy is configured separately.
 
-on:
-  pull_request:
-    branches: [main]
+## Registry and deployment access
 
-permissions:
-  contents: read
+GHCR is the selected registry. Use ephemeral build credentials where supported. Public pullable images may avoid node registry credentials; private packages require a minimally scoped, rotatable imagePullSecret. Validate organization permissions and available storage/usage allowance before choosing visibility.
 
-jobs:
-  validate:
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout Source
-        uses: actions/checkout@v4
+AWS OIDC authenticates a workflow to AWS APIs. It does not open an SSH route or grant Kubernetes RBAC. For the initial AWS design, deployment runs through a controlled operator workstation or approved runner with known egress to restricted SSH, then namespace-scoped kubectl on the node. Credential issuance/rotation must be implemented and tested; do not copy the root K3s kubeconfig into GitHub secrets.
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+## Concurrency and failure
 
-      - name: Validate Compose Configurations
-        run: |
-          docker compose -f docker-compose.yml config --quiet
-          docker compose -f docker-compose.prod.yml config --quiet
+Allow only one deployment per environment through the supported entry point. Keep deployment journal and last accepted bundle. A timeout, canceled job or Ready Pod count alone must not mark a release successful. Reconcile actual live state after interruption and invoke the complete bundle rollback from [deployment](DEPLOYMENT.md).
 
-      - name: Run Unit & Contract Tests in Container
-        run: |
-          docker compose -f docker-compose.test.yml build test-runner
-          docker compose -f docker-compose.test.yml run --rm test-runner pytest tests/unit tests/contracts -v
-```
+Infrastructure jobs use separate permissions and state locking. Never destroy the environment from a generic application-test cleanup job.
 
----
+## Evidence and retention
 
-### 2. Trusted Build, Scan & Provenance Workflow (`.github/workflows/build.yml`)
-
-```yaml
-name: "Build, Scan & Publish Release"
-
-on:
-  push:
-    branches: [main]
-
-permissions:
-  contents: read
-  packages: write
-  id-token: write # Required for Cosign keyless signing via OIDC
-
-jobs:
-  build-and-publish:
-    runs-on: ubuntu-24.04
-    steps:
-      - name: Checkout Source
-        uses: actions/checkout@v4
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Install Cosign & Trivy
-        uses: sigstore/cosign-installer@v3.7.0
-
-      - name: Log in to Docker Hub
-        uses: docker/login-action@v3
-        with:
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_PASSWORD }}
-
-      - name: Build Backend Image
-        id: build-backend
-        uses: docker/build-push-action@v6
-        with:
-          context: ./backend
-          platforms: linux/amd64
-          push: true
-          tags: ${{ secrets.DOCKER_USERNAME }}/chatapp-backend:${{ github.sha }}
-          outputs: type=image,name=target,annotation-index.org.opencontainers.image.description=ChatApp Backend
-
-      - name: Scan Backend with Trivy (Fail on High/Critical CVEs)
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: ${{ secrets.DOCKER_USERNAME }}/chatapp-backend:${{ github.sha }}
-          format: 'table'
-          exit-code: '1'
-          ignore-unfixed: true
-          severity: 'CRITICAL,HIGH'
-
-      - name: Generate CycloneDX SBOM
-        uses: aquasecurity/trivy-action@0.28.0
-        with:
-          image-ref: ${{ secrets.DOCKER_USERNAME }}/chatapp-backend:${{ github.sha }}
-          format: 'cyclonedx'
-          output: 'backend-sbom.json'
-
-      - name: Sign Container Image with Cosign (Keyless)
-        run: |
-          cosign sign --yes ${{ secrets.DOCKER_USERNAME }}/chatapp-backend@${{ steps.build-backend.outputs.digest }}
-
-      - name: Generate and Upload Release Manifest (release.json)
-        run: |
-          bash scripts/package-release.sh \
-            --backend-digest "${{ steps.build-backend.outputs.digest }}" \
-            --commit "${{ github.sha }}" \
-            --output "release.json"
-```
-
----
-
-## Cryptographic Release Manifest Contract (`release.json`)
-
-The release manifest guarantees immutable traceability between git commit, OCI container image digests, configuration checksums, and SBOM artifacts:
-
-```json
-{
-  "$schema": "https://chatapp.internal/schemas/release-v1.schema.json",
-  "manifest_version": 1,
-  "release_id": "20261025.1-sha.e95405e",
-  "source_commit": "e95405e4b7b30f0a82b95c6c21e645167015a812",
-  "build_timestamp": "2026-10-25T14:45:00Z",
-  "platform": "linux/amd64",
-  "images": {
-    "backend": "index.docker.io/myorg/chatapp-backend@sha256:7f3b4a2e8c1d5f6a9b0c2e4d8f1a3b5c7e9d0f2a4b6c8e0d2f4a6b8c0e2d4f6a",
-    "frontend": "index.docker.io/myorg/chatapp-frontend@sha256:1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b1c2d3e4f5a6b7c8d9e0f1a2b",
-    "gateway": "index.docker.io/library/nginx@sha256:0d17b565c37bcbd895e3d92318a05974013321437716f29d973a61a3fae9b082",
-    "redis": "index.docker.io/library/redis@sha256:c2b189ff4c2c77d46c75fd9dd10c2847a96d29944a1eb4051a3b7d14c2b992f0"
-  },
-  "config_checksums": {
-    "docker_compose": "sha256:9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
-    "nginx_conf": "sha256:5e884898da28047151d0e56f8dc6292773603d0d6aabbdd62a11ef721d1542d8",
-    "redis_conf": "sha256:4b227777d4dd1fc61c6f884f48641d02b4d121d3fd328cb08b5531fcacdabf8a"
-  },
-  "security_evidence": {
-    "trivy_scan_passed": true,
-    "cosign_signed": true,
-    "sbom_sha256": "sha256:2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae"
-  }
-}
-```
-
----
-
-## Security Scan & Failure Gate Policies
-
-1. **Vulnerability Thresholds:** Any `CRITICAL` or `HIGH` Common Vulnerabilities and Exposures (CVE) with an available vendor patch terminates the CI build immediately.
-2. **Indeterminate Scans:** If the vulnerability database cannot be downloaded or the scanner process crashes, the pipeline fails closed; deployment is prohibited.
-3. **Vulnerability Exceptions Policy:** If an unfixable upstream base-image vulnerability is detected, an explicit exception record must be added to `.trivyignore` containing:
-   - CVE Identifier (e.g. `CVE-2024-XXXXX`).
-   - Rationale / Justification explaining why the vulnerability is not exploitable in this architecture.
-   - Expiration date ($\le 30\text{ days}$).
-   - Assigned engineer owner.
-
----
-
-## Pipeline Failure Classification & Recovery
-
-| Failure Class | Root Cause Example | Pipeline Action | Operator Remediation |
-| --- | --- | --- | --- |
-| **Lint / Unit Test Failure** | Syntax error, broken normalization rule, assertion failure. | Workflow exits 1; cancels build. | Fix code on local branch; push new commit. |
-| **Vulnerability Gate Failure** | High CVE discovered in base image. | Workflow exits 1; suppresses registry push. | Bump base image digest or update pinned package version. |
-| **Signing / Attestation Error** | OIDC token failure or Sigstore network timeout. | Bounded retry (3 attempts); exits if unresolved. | Check GitHub Actions permissions (`id-token: write`). |
-| **Host SSH Connection Drop** | EC2 security group block or network disruption. | Deployment script aborts; host lock remains held. | Inspect host journal (`/home/ubuntu/chat-app/deploy.log`); clear lock if safe. |
-
----
-
-## Related Guides
-
-[Configuration](CONFIGURATION.md) | [Security](SECURITY.md) | [Deployment](DEPLOYMENT.md) | [Release Checklist](RELEASE_CHECKLIST.md)
+Retain logs without payloads/secrets, test summaries, raw load samples, digests, signatures, manifests, SBOMs and rollback timings. Set artifact/registry retention to preserve the current and rollback release without unbounded growth. Report pending checks as pending; no CI execution has occurred in this repository.
 

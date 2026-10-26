@@ -2,7 +2,7 @@
 
 **Status:** Proposed implementation contract. See the [documentation index](../README.md).
 
-**Protocol Design Revision 4 (2026-10-25):** Definitive wire protocol specification establishing discriminated JSON schemas, RFC 6455 WebSocket frame invariants, strict Unicode normalization rules, granular denial and close code semantics, and OpenMetrics telemetry exposition.
+**Protocol revision 4, reviewed for deployment design revision 5 (2026-10-26):** Definitive wire protocol specification establishing discriminated JSON schemas, RFC 6455 WebSocket frame invariants, strict Unicode normalization rules, granular denial and close code semantics, and OpenMetrics telemetry exposition.
 
 ## HTTP & WebSocket Route Matrix
 
@@ -10,7 +10,7 @@
 | --- | --- | --- | --- | --- |
 | `/` | HTTP GET | Public (via Gateway) | None | Serve frontend static shell (`index.html`). |
 | `/assets/*` | HTTP GET | Public (via Gateway) | None | Static CSS, JS, and SVG assets with cache headers. |
-| `/health` | HTTP GET | Public / Internal | None | Dependency-aware readiness probe (checks Redis connectivity & subscriber loop). Returns HTTP 200 or 503. |
+| `/health` | HTTP GET | Private Internal Only (Denied by Gateway) | Internal network policy | Kubernetes readiness probe checks Redis connectivity and subscriber freshness. Returns HTTP 200 or 503. |
 | `/live` | HTTP GET | Private Internal Only (Denied by Gateway) | None | Process event-loop responsiveness check. Returns HTTP 200 `{"status": "alive"}`. |
 | `/metrics` | HTTP GET | Private Internal Only (Denied by Gateway) | None | Prometheus / OpenMetrics text exposition for scrapers. |
 | `/ws/{username}` | WebSocket (WS/WSS) | Public (via Gateway) | `Origin` header validated against `ALLOWED_ORIGINS` | Bidirectional real-time messaging enforcing subprotocol `chat.v1`. |
@@ -20,7 +20,7 @@
 ## Health, Liveness & Metrics Specifications
 
 ### 1. Readiness Probe: `GET /health`
-- **Purpose:** Gateway routing health check and container orchestration readiness probe.
+- **Purpose:** Kubernetes readiness probe controlling backend Service endpoints. Detailed health data is not exposed through the public gateway.
 - **Success (`200 OK`):** Returned only when the backend can execute `PING` on Redis within `REDIS_COMMAND_TIMEOUT_SECONDS` (1.0s) **AND** the subscriber heartbeat was acknowledged within `SUBSCRIBER_STALE_SECONDS` (10s) on the current generation nonce.
 - **Failure (`503 Service Unavailable`):** Returned if the process is starting up, in `DRAINING` state, Redis is unreachable, or the subscriber coroutine has stalled.
 
