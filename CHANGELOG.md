@@ -16,6 +16,11 @@ This file records actual repository changes. Planned application features remain
 - Contribution guidance, release checklist and future demonstration guide.
 - README links providing one entry point to the project documentation.
 
+### Updated - 2026-10-26
+
+- Reorganized the README with a clear project status, architecture diagram, planned stack, reading paths, grouped documentation index and implementation roadmap.
+- Corrected README capability and capacity wording to distinguish proposed design from verified implementation and align the candidate workload with the requirements.
+
 ### Clarified
 
 - The runtime target has four Compose services and five application containers because the backend has two replicas.
