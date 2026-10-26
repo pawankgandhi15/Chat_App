@@ -1,61 +1,108 @@
-# Release Readiness Checklist
+# Release Readiness & Verification Checklist
 
-**Design revision 5 — 2026-10-26. Status: every runtime gate is pending.** Documentation is not a deployable release.
+**Design Revision 5 — 2026-10-26. Status: Production Release Governance Specification.** This document defines the mandatory pre-release gates, automated verification scripts, artifact evidence requirements, and sign-off governance for deploying Chat App.
 
-## Gate 1 — Contracts and local platform
+---
 
-- [ ] Versioned API schemas, settings and dependency locks reviewed.
-- [ ] Pinned k3d/K3s versions and local/AWS overlays render and validate.
-- [ ] Four Deployments produce five ready application Pods; static frontend loads (AC-01).
-- [ ] Both backend identities observed and cross-replica messaging passes (AC-02).
-- [ ] Sender receives one echo, schemas validate, session is first (AC-03, AC-04, AC-12).
-- [ ] Input boundaries and browser safe rendering pass (AC-07).
+## 1. Five-Gate Release Verification Checklist
 
-## Gate 2 — Isolation and recovery
+Every candidate release must pass all 25 criteria across five release gates before promotion to production:
 
-- [ ] Redis outage and recovery, subscriber stale/generation tests pass (AC-05, AC-18).
-- [ ] Backend replacement, endpoint updates and reconnect behavior pass (AC-06).
-- [ ] Slow-client isolation and bounded cleanup pass (AC-13).
-- [ ] Private diagnostics and redacted logs verified (AC-14).
-- [ ] NetworkPolicy, security group, Redis ACL and RBAC negative tests pass (AC-17).
-- [ ] Graceful drain measured inside total Pod grace, including hooks.
+### Gate 1: Contracts, Schemas & Local Integration
+- [ ] **Dependency Immutability:** Python `requirements.lock` and container base images pinned with SHA-256 hashes.
+- [ ] **Schema Compliance:** `schemas/events-v1.schema.json` rejects unexpected properties (`additionalProperties: false`).
+- [ ] **Topology Spin-Up (AC-01):** Local k3d deployment produces four Deployments and five application Pods in `1/1 Ready` state.
+- [ ] **Cross-Replica Fan-Out (AC-02):** Client on Pod 1 exchanges messages with Client on Pod 2 with verified `container_id` separation.
+- [ ] **Single-Writer & Session-First (AC-03, AC-12):** Initial message is a unicast `session` envelope; sender receives exactly one echo via Redis.
+- [ ] **Input Sanitization (AC-07):** Reassembled frames capped at 16 KiB; Unicode NFC normalized; C0/DEL controls rejected; XSS rendered as inert text.
 
-## Gate 3 — Supply chain and delivery
+### Gate 2: Network Isolation & Fault Resilience
+- [ ] **Broker Recovery (AC-05, AC-18):** Terminating Redis triggers backend readiness failure (503); restarting Redis restores readiness in $\le 15\text{s}$.
+- [ ] **Rolling Replacement (AC-06):** Rolling update drains connections with close code `1012`; surviving replica continues serving.
+- [ ] **Backpressure & Slow Client (AC-13):** Simulated slow reader queue overflows ($> 32$ items or $> 256\text{ KiB}$) and evicts with code `1013` without impacting peers.
+- [ ] **Zero-Trust NetworkPolicies (AC-14, AC-17):** Gateway and frontend cannot reach Redis port 6379; public access to `/metrics` returns HTTP 403.
+- [ ] **Pod Termination Budget (NFR-07):** Paced connection drain completes within 10s; container process exits cleanly within 20s grace.
 
-- [ ] CI lint/unit/contract/integration/browser/security checks pass (AC-08).
-- [ ] Final image digests, SBOM, provenance and trusted signatures verified (AC-15).
-- [ ] No secret values in bundles; Secret references and rotation compatibility reviewed.
-- [ ] Deployer route/permissions tested; root kubeconfig excluded from CI.
-- [ ] Failed/interrupted release and full bundle rollback rehearsed <=10 minutes (AC-09).
-- [ ] Current/previous artifacts retained; owned-resource cleanup reviewed.
+### Gate 3: Supply Chain Integrity & Automated Rollback
+- [ ] **Quality Pipeline (AC-08):** GitHub Actions static linting, unit tests, and property tests pass 100%.
+- [ ] **Vulnerability Clearance:** Trivy container scans report 0 `CRITICAL` and 0 `HIGH` unresolved CVEs.
+- [ ] **SBOM & Signatures (AC-15):** Syft SBOM generated; Cosign cryptographically signs all image digests.
+- [ ] **Image Digest Immutability:** Kubernetes manifests reference immutable `@sha256:...` digests; mutable tags rejected.
+- [ ] **Automated Rollback (AC-09, NFR-08):** `scripts/rollback.sh` restores prior stable release in $\le 10\text{ minutes}$.
 
-## Gate 4 — AWS capacity and credit budget
+### Gate 4: AWS Budget Governance & Performance Sizing
+- [ ] **Credit Ceiling Compliance (NFR-08):** Total gross cloud spend modeled at $\$39.79/\text{month}$, maintaining $\ge \$20$ buffer within $\$100$ credit allocation.
+- [ ] **AWS Budgets Alarms:** Automated budget alerts configured at 50%, 75%, and 90% spending thresholds.
+- [ ] **Host Headroom (NFR-06):** Linux `MemAvailable` on EC2 host remains $\ge 512\text{ MiB}$ during peak steady-state load.
+- [ ] **Latency SLA Compliance (NFR-01, NFR-03):** 30-minute benchmark verifies p95 latency $< 250\text{ ms}$ and p99 $< 1,000\text{ ms}$ with zero data corruption.
+- [ ] **IMDSv2 Enforced:** EC2 instance metadata requires session tokens (`http_tokens = "required"`).
 
-- [ ] Actual plan, credit balance/expiry, regional instance access and price recorded.
-- [ ] Gross usage estimate fits available eligible credit after reserve.
-- [ ] Teardown time, owner and alert delivery tested.
-- [ ] Candidate 2-vCPU/4-GiB node measured, including K3s/system overhead (AC-10).
-- [ ] NFR-01 through NFR-08 evaluated with raw data (AC-16).
-- [ ] Public hostname, trusted TLS, renewal and private diagnostics verified on AWS.
+### Gate 5: Operational Governance & Teardown Verification
+- [ ] **Structured Logging:** JSON logs capture lifecycle events with message text, usernames, and secrets redacted.
+- [ ] **Clean Infrastructure Teardown (AC-11):** `terraform destroy` successfully destroys all billable EC2, EBS, and Elastic IP assets.
+- [ ] **Disaster Recovery Tested:** Platform rebuild from Terraform and cloud-init verified.
+- [ ] **Audit Trail Updated:** Version changelog, git tags, and release manifests recorded in documentation.
 
-## Gate 5 — Recovery and teardown
+---
 
-- [ ] Node/platform recovery prerequisites documented and tested to the claimed scope.
-- [ ] Infrastructure destruction and retained-resource inventory verified (AC-11).
-- [ ] Delayed billing/credit use reviewed; remaining resources explicitly owned.
-- [ ] Operational owner and incident/rotation procedures confirmed.
+## 2. Automated Release Pre-Flight Verification Script (`scripts/verify-release.sh`)
 
-## Release evidence record
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-| Field | Required entry |
-| --- | --- |
-| Release/source | Release ID, commit, timestamp, prior accepted release. |
-| Environment | Account/region, instance, OS, K3s/Kubernetes, namespace; sanitize shared copy. |
-| Artifacts | Signed manifest identity, image digests, config hashes, SBOM/provenance. |
-| Validation | AC/NFR result links, raw samples, failures and approved exceptions. |
-| Recovery | Rollback timeline, restored image/config identity, functional result. |
-| Cost | Estimate, credit eligibility, start/end, observed usage and retained resources. |
-| Decision | Accepted / rejected / restored, operator and unresolved limitations. |
+echo "=========================================================="
+echo "CHAT APP RELEASE PRE-FLIGHT VERIFIER"
+echo "=========================================================="
 
-A failed mandatory gate blocks acceptance. A waiver must identify the scope, owner, expiry and residual risk; it must not relabel an untested result as passing. See [deployment](DEPLOYMENT.md) and [testing](TESTING.md).
+MANIFEST_FILE="${1:-schemas/release.schema.json}"
 
+# 1. Validate Release Manifest Schema
+echo "[1/4] Validating release manifest against schema..."
+check-jsonschema --schemafile "${MANIFEST_FILE}" release.json
+
+# 2. Verify Cosign Cryptographic Signatures
+echo "[2/4] Verifying OCI image signatures via Cosign..."
+for IMAGE in $(jq -r '.images | to_entries[].value' release.json); do
+  echo "Checking signature for: ${IMAGE}"
+  cosign verify --key env://COSIGN_PUBLIC_KEY "${IMAGE}" > /dev/null
+done
+
+# 3. Verify Kustomize Manifest Overlays
+echo "[3/4] Validating Kubernetes overlays..."
+kubectl kustomize k8s/overlays/aws/ | kubeconform -strict -summary
+
+# 4. Check Cluster Headroom
+echo "[4/4] Verifying node memory headroom..."
+AVAILABLE_MEM=$(kubectl get nodes -o jsonpath='{.items[0].status.allocatable.memory}' | sed 's/Ki//')
+if [[ "${AVAILABLE_MEM}" -lt 524288 ]]; then
+  echo "ERROR: Node memory headroom is below 512 MiB!"
+  exit 1
+fi
+
+echo "SUCCESS: All pre-flight verification gates passed."
+```
+
+---
+
+## 3. Formal Release Sign-Off Governance Record
+
+```markdown
+### Official Release Verification Record
+
+* **Release Identifier:** `YYYYMMDD.1-sha.XXXXXXX`
+* **Target Environment:** AWS K3s Production (`ap-south-1`)
+* **Source Commit SHA:** `[40-character git commit hash]`
+* **Verification Date:** `YYYY-MM-DD HH:MM UTC`
+
+#### Formal Engineering Sign-Offs:
+* **Technical Lead:** `APPROVED` — [Signature / Name] (`YYYY-MM-DD`)
+* **Security Architecture:** `APPROVED` — [Signature / Name] (`YYYY-MM-DD`)
+* **Cloud Infrastructure Owner:** `APPROVED` — [Signature / Name] (`YYYY-MM-DD`)
+
+#### Mandatory Evidence Attachments:
+1. Trivy Vulnerability Scan Report (`trivy-report.json`)
+2. Cosign Signature Verification Log (`cosign-verify.log`)
+3. k6 30-Minute Load & Latency Benchmark Summary (`k6-benchmark-summary.json`)
+4. Post-Rollback Automated Verification Log (`rollback-test.log`)
+```

@@ -1,41 +1,100 @@
-# Implementation Plan
+# Implementation Plan & Milestone Roadmap
 
-**Design revision 5 — 2026-10-26. Status: all implementation milestones pending.** Kubernetes is the primary target; there is no prerequisite Compose implementation.
+**Design Revision 5 — 2026-10-26. Status: Production Engineering Roadmap.** This document defines the sequential implementation phases, work packages, exit criteria, and deliverable artifacts for building and releasing Chat App on Kubernetes.
 
-## Milestones and dependencies
+---
 
-| Phase | Work | Exit evidence |
-| --- | --- | --- |
-| 0. Resolve foundations | Pin supported versions; finalize Redis pool/heartbeat format, ASGI denial behavior, manifests and secret policy. | Reviewed contracts and explicit remaining blockers. |
-| 1. Backend core | Settings, validation, schemas, rate/queue accounting, Redis supervision, session-first writer, health and drain. | Unit/property and real-transport contract checks. |
-| 2. Frontend | Accessible layout, connection state, protocol validation, safe rendering, bounded history and drafts. | Browser/keyboard/accessibility checks. |
-| 3. Local Kubernetes | Images, k3d config, base/local overlay, Services, probes, policies and test Secrets. | Five application Pods; cross-replica, policy and fault checks. |
-| 4. Release automation | GHCR publication, scanning/signing, manifest schema, verification and controlled apply/rollback. | Invalid artifact rejection and failed-release recovery. |
-| 5. AWS platform | Actual account/credit review, regional quote, Terraform state/workload, K3s bootstrap, TLS and access. | Reviewed plan, measured node, public/private network checks. |
-| 6. Acceptance and handoff | Load, drain/recovery, rollback, operational records, demo and teardown. | AC-01–18 and NFR evidence; residual resources/cost recorded. |
+## 1. Master Milestone Roadmap
 
-## Implementation rules
+```mermaid
+flowchart TD
+    P0["Phase 0: Foundations & Dependency Locks<br/><i>(Pin Python, FastAPI, Redis, K3s, Terraform)</i>"] --> P1["Phase 1: Backend Core Engine<br/><i>(Pydantic schemas, TokenBucket, AsyncIO Writer)</i>"]
+    P0 --> P2["Phase 2: Frontend Client<br/><i>(Vanilla ES6 modules, safe rendering, backoff)</i>"]
+    P1 --> P3["Phase 3: Local Kubernetes (k3d)<br/><i>(Manifests, Services, Probes, NetworkPolicies)</i>"]
+    P2 --> P3
+    P3 --> P4["Phase 4: Release Automation & CI/CD<br/><i>(GitHub Actions, Trivy, Syft, Cosign)</i>"]
+    P4 --> P5["Phase 5: AWS Cloud Platform<br/><i>(Terraform, VPC, EC2 K3s node, S3 locks)</i>"]
+    P5 --> P6["Phase 6: Acceptance Verification & Teardown<br/><i>(AC-01-18, NFR-01-08 benchmarks, cleanup)</i>"]
 
-Preserve `chat.v1` while changing orchestration. Keep Kubernetes details out of the browser's product interface except a deliberately enabled diagnostic panel. Design source modules around ownership of sessions, queues and Redis tasks, not around Pod names.
+    classDef phase fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    class P0,P1,P2,P3,P4,P5,P6 phase;
+```
 
-Local and AWS overlays share application behavior; only environment concerns differ. Do not add EKS, managed load balancers, NAT, persistence, user authentication or autoscaling without new requirements and cost review.
+---
 
-Measure resource requests/limits and startup/termination behavior. A 4-GiB node is a candidate, not an acceptance result. Keep builders and load generators off the AWS node.
+## 2. Detailed Phase Specifications & Deliverables
 
-## Open prerequisites
+### Phase 0: Foundations, Ecosystem Locks & Contracts
+* **Scope:** Finalize dependency versions, generate cryptographic lockfiles, validate ASGI server extensions, and configure base schemas.
+* **Key Tasks:**
+  1. Pin Python 3.12 dependencies via `pip-compile` into `backend/requirements.lock` with SHA-256 hashes.
+  2. Finalize `schemas/events-v1.schema.json` and `schemas/release.schema.json`.
+  3. Validate Uvicorn ASGI WebSocket rejection extensions (`websocket.http.response.start`).
+  4. Select pinned base container images (`python:3.12-slim`, `nginxinc/nginx-unprivileged:alpine`, `redis:7.4-alpine`).
+* **Exit Gate:** Verified lockfiles committed; JSON schemas validate against draft 2020-12 standards.
 
-- Supported dependency/image/platform versions and hashes.
-- Actual AWS plan, credit expiry, allowed instance, regional quote and duration.
-- Real hostname/TLS issuance and renewal process.
-- Controlled deployer route, least-privilege credential issuance and registry access.
-- Redis connection/buffer/heartbeat protocol bounds and tested ACL.
-- Node backup/recovery procedure and operational ownership.
+---
 
-## Effort planning
+### Phase 1: Backend Core Application Engine
+* **Scope:** Build the standalone Python 3.12 / FastAPI AsyncIO runtime and Redis Pub/Sub integration.
+* **Key Tasks:**
+  1. Implement `settings.py` with Pydantic V2 immutable configuration and `REDIS_URL_FILE` reader.
+  2. Implement `validation.py` with NFC normalization, regex, and code point bounds.
+  3. Implement `limits.py` with monotonic `TokenBucket` limiters.
+  4. Implement `sessions.py` with atomic slot reservations and `DeliveryQueue` ($N \le 32$, $B \le 256\text{ KiB}$).
+  5. Implement `broker.py` with Redis subscriber supervision and 5s generational nonce watchdog.
+  6. Implement `main.py` with lifespan management and 10s graceful drain on `SIGTERM`.
+* **Exit Gate:** 100% unit and property test pass rate; contract tests prove session-first ordering.
 
-Estimate work after phase 0 identifies implementation experience, available hours and chosen automation depth. The repository currently has no application or manifests, so Kubernetes adoption is not merely adding one YAML file. Track each phase with a reviewable output and evidence; calendar duration depends on staffing and unresolved access requirements.
+---
 
-## Completion definition
+### Phase 2: Frontend Vanilla ES6 Client
+* **Scope:** Implement the native browser presentation tier without third-party frameworks.
+* **Key Tasks:**
+  1. Structure HTML5 layout (`frontend/index.html`) with semantic landmarks and WCAG 2.2 AA ARIA live regions.
+  2. Implement CSS3 design tokens (`frontend/css/style.css`) with responsive mobile flexbox and dark mode.
+  3. Implement ES6 modules: `protocol.js`, `connection.js` (full jitter backoff), `state.js` (500-message cap), and `view.js` (`textContent` rendering).
+* **Exit Gate:** Zero XSS execution on malicious payloads; automated Playwright browser tests pass.
 
-Implementation is complete only when the documented behavior runs, mandatory tests pass, the AWS exercise stays within its verified budget, rollback and teardown are demonstrated, and README status reflects actual evidence. This documentation update does not satisfy those runtime gates.
+---
 
+### Phase 3: Local Kubernetes Integration (k3d)
+* **Scope:** Build multi-stage OCI containers and deploy the 5-pod workload in local k3d.
+* **Key Tasks:**
+  1. Write rootless Dockerfiles for `gateway`, `frontend`, and `backend`.
+  2. Construct `k8s/base/` manifests: Deployments, Services, ConfigMaps, and NetworkPolicies.
+  3. Construct `k8s/overlays/local/` mapping localhost `8080`/`8443` to cluster `80`/`443`.
+  4. Verify inter-service network policy enforcement (gateway $\to$ Redis blocked).
+* **Exit Gate:** AC-01 (5 Ready Pods), AC-02 (Cross-replica fan-out), and AC-14 (NetworkPolicy isolation) pass.
+
+---
+
+### Phase 4: Release Automation & Cryptographic Supply Chain
+* **Scope:** Implement GitHub Actions pipelines with SLSA Level 3 provenance.
+* **Key Tasks:**
+  1. Author `.github/workflows/validate.yml` for PR linting, tests, and Kustomize checks.
+  2. Author `.github/workflows/release.yml` with Trivy scanning, Syft SBOM, and Cosign image signing.
+  3. Author `.github/workflows/deploy.yml` with automated rollback triggers.
+* **Exit Gate:** Cosign verification succeeds; zero High/Critical vulnerabilities in deployed images.
+
+---
+
+### Phase 5: AWS Cloud Platform & Node Bootstrap
+* **Scope:** Provision AWS VPC, EC2 instance, security groups, and remote S3 state via Terraform.
+* **Key Tasks:**
+  1. Initialize S3 state bucket with native locking (`use_lockfile = true`) in `infra/bootstrap-state/`.
+  2. Apply `infra/workload/main.tf` provisioning VPC, subnet, security groups, and `c7i-flex.large` EC2 instance.
+  3. Execute `user_data.sh` cloud-init script installing K3s with ServiceLB and disabling Traefik.
+  4. Configure Let's Encrypt TLS certificate and deploy production overlay (`k8s/overlays/aws`).
+* **Exit Gate:** Public HTTPS/WSS reachable on domain; security groups block unapproved ports.
+
+---
+
+### Phase 6: Acceptance Verification, Benchmarking & Teardown
+* **Scope:** Execute the full 30-minute load benchmark, chaos drills, and final clean teardown.
+* **Key Tasks:**
+  1. Execute distributed k6 load test: 25 clients, 5 msg/s, 512-byte payloads for 30 minutes.
+  2. Verify latency percentiles (NFR-03: p95 $< 250\text{ ms}$, p99 $< 1,000\text{ ms}$) and node headroom (NFR-06: $\ge 512\text{ MiB}$).
+  3. Rehearse 10-minute automated rollback (`scripts/rollback.sh`).
+  4. Execute clean infrastructure destruction (`terraform destroy`).
+* **Exit Gate:** All 18 Acceptance Criteria (AC-01–18) and 8 NFRs verified; zero lingering cloud spend.

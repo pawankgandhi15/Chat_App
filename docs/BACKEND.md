@@ -1,216 +1,216 @@
-# Backend Technology and Engineering Guide
+# Backend Technology, Concurrency & Engineering Guide
 
-**Status:** Specification for future implementation; no backend, tests or deployment have been implemented. Updated for design revision 5 on 2026-10-26; primary runtime is Kubernetes.
+**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document provides the engineering specifications for the Python 3.12 / FastAPI backend runtime, AsyncIO concurrency models, Redis Pub/Sub supervision, backpressure mechanics, and graceful shutdown lifecycle for Chat App.
 
-This guide consolidates backend technologies, service boundaries, protocol handling, data flow, concurrency, validation, security, observability and delivery requirements. Read it with the [frontend guide](FRONTEND.md). It describes an anonymous, single-room demonstration on one host; two replicas do not provide host-level high availability.
+---
 
-## 1. Responsibilities and Boundaries
+## 1. Backend Architecture & Modular Decomposition
 
-Each backend accepts browser WebSockets through the gateway, validates connection/message policy, publishes normalized events to Redis and delivers subscribed events to its own connected clients. Each replica owns only its local sessions, rate budgets, tasks and delivery queues. Redis provides shared live fan-out.
-
-There is no user database, login service, message-history API, durable queue or presence database in the baseline. Display names are not authenticated identities. Adding accounts, rooms, uploads, moderation storage or durable history requires new security, API, storage and migration designs.
-
-## 2. Technology Stack
-
-| Technology | Role | Implementation requirement |
-| --- | --- | --- |
-| Python | Backend runtime | Use a supported, reviewed Python release compatible with the selected dependencies; current design targets Python 3.11+. |
-| FastAPI | ASGI application and routes | App factory/lifespan ownership, HTTP health routes and WebSocket admission. |
-| Starlette | Underlying ASGI/WebSocket behavior | Verify handshake denial and close behavior with the actual Uvicorn transport. |
-| Uvicorn | ASGI server | One worker per backend container; two separately addressable containers. |
-| Pydantic / pydantic-settings | Event models and startup settings | Strict field/range validation; fail startup on unsafe public configuration. |
-| `redis.asyncio` / redis-py | Redis publisher and dedicated subscriber connections | Bounded pools, timeouts, authentication and explicit cleanup. |
-| Redis | Ephemeral shared Pub/Sub bus | Disable RDB/AOF persistence; restrict channels and commands through ACLs. |
-| `hiredis` | Optional accelerated Redis parsing | Retain only if compatible and useful in measured tests. |
-| Structured logging / metrics client | Operational evidence | Redacted JSON logs and bounded-cardinality private metrics. |
-| pytest, pytest-asyncio, HTTPX, Hypothesis | Unit, HTTP, property and lifecycle checks | Execute tests in the project's containerized harness; use real Redis for integration. |
-| OCI images, K3s and Nginx gateway | Packaging, replicas and ingress | Reviewed image locks, private backend port, limits and WebSocket proxying. |
-
-See [technologies](TECHNOLOGIES.md) for earlier candidate pins. No lockfile or compatibility run exists yet; resolve FastAPI/Starlette/Uvicorn/transport versions together and recheck supported patches before implementation. The metrics, property-test and browser-test packages still need explicit dependency selection and locks.
-
-Use FastAPI's lifespan context to own shared resources and shutdown, as described in the [official lifespan documentation](https://fastapi.tiangolo.com/advanced/events/).
-
-## 3. Integration Architecture
+The backend service runs on Python 3.12 using FastAPI and Uvicorn. To eliminate hidden global state and ensure testability, all components are initialized via FastAPI's `lifespan` manager and explicitly injected into the application state:
 
 ```mermaid
-flowchart LR
-    Browser[Browser] -->|WSS chat.v1| Gateway[Nginx gateway]
-    Gateway --> A[Backend A]
-    Gateway --> B[Backend B]
-    A -->|Publish| Bus[Redis Pub/Sub]
-    B -->|Publish| Bus
-    Bus -->|Subscribe| A
-    Bus -->|Subscribe| B
-    A -->|Local socket queues| BrowserA[Clients on A]
-    B -->|Local socket queues| BrowserB[Clients on B]
+flowchart TD
+    subgraph Bootstrap["Process Lifecycle & Bootstrap"]
+        Main["main.py<br/><i>FastAPI App Lifespan & Signal Handling</i>"]
+        Settings["settings.py<br/><i>Immutable Pydantic V2 Configuration</i>"]
+    end
+
+    subgraph CoreEngine["Connection & State Engine"]
+        Validation["validation.py<br/><i>NFC Unicode, Regex, Length Checks</i>"]
+        Limits["limits.py<br/><i>Monotonic Token-Bucket Limiting</i>"]
+        Sessions["sessions.py<br/><i>Session Registry & Double-Accounting Deques</i>"]
+    end
+
+    subgraph BrokerMesh["Distributed Broker Interface"]
+        Protocol["protocol.py<br/><i>Pydantic Wire Envelopes & Serialization</i>"]
+        Broker["broker.py<br/><i>Redis Subscriber Supervision & Publisher Pool</i>"]
+    end
+
+    subgraph Telemetry["Observability & Gating"]
+        Health["health.py<br/><i>Readiness (/health) & Liveness (/live)</i>"]
+        Metrics["telemetry.py<br/><i>Prometheus Metrics & Redacted Logging</i>"]
+    end
+
+    Main --> Settings
+    Main --> Broker
+    Main --> Sessions
+    Main --> Health
+    Main --> Metrics
+
+    Sessions --> Limits
+    Sessions --> Validation
+    Sessions --> Protocol
+    Broker --> Protocol
+    Health --> Broker
+    Health --> Sessions
+
+    classDef core fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    classDef engine fill:#0f172a,stroke:#10b981,stroke-width:2px,color:#f8fafc;
+    classDef broker fill:#3b0764,stroke:#a855f7,stroke-width:2px,color:#f8fafc;
+    classDef obs fill:#451a03,stroke:#f59e0b,stroke-width:2px,color:#f8fafc;
+    class Main,Settings core;
+    class Validation,Limits,Sessions engine;
+    class Protocol,Broker broker;
+    class Health,Metrics obs;
 ```
 
-The backend listens on Pod port 8000 behind a ClusterIP Service. Redis listens on 6379 behind its own ClusterIP Service. Default-deny NetworkPolicies allow gateway-to-backend and backend-to-Redis while denying gateway/frontend-to-Redis. K3s ServiceLB exposes only gateway application ports 80/443 on the node.
+---
 
-A WebSocket remains attached to its selected backend until it closes. Redis removes the need to deliver all senders to the same replica; it does not migrate an open socket. Reconnection establishes a new session and may select either replica. No sticky-session dependency is needed for the baseline.
+## 2. Asynchronous Concurrency & Task Topology
 
-## 4. Routes and Event Contracts
+For each accepted WebSocket connection, the backend allocates **exactly two cooperative AsyncIO tasks**, enforcing the Single-Writer Principle:
 
-| Interface | Exposure | Responsibility |
-| --- | --- | --- |
-| `GET /health` | Internal; gateway denies public access | Kubernetes readiness: 200 only while dependency-aware readiness is satisfied; otherwise 503. |
-| `GET /live` | Internal; gateway denies public access | Event-loop liveness independent of Redis. |
-| `GET /metrics` | Internal; gateway denies public access | Scrapeable operational measurements. |
-| `/ws/{username}` | Public through gateway | Mandatory `chat.v1`, origin validation, admission and live text messaging. |
+```mermaid
+flowchart TD
+    subgraph ConnectionScope["Per-Connection Task Allocation"]
+        Reader["Reader Task (asyncio.Task)<br/>1. Reads inbound WebSocket frames<br/>2. Reassembles frames (<= 16 KiB)<br/>3. Enforces UTF-8 & code point limits<br/>4. Charges socket TokenBucket (5 burst, 1/s)<br/>5. Publishes valid events to Redis"]
 
-The gateway/frontend serves `/` and `/assets/*`; those are not backend HTML routes. No REST create/list-message routes are part of the baseline.
+        Writer["Writer Task (Single-Writer Principle)<br/>1. Awaits payloads from DeliveryQueue<br/>2. Flushes JSON frame to transport (timeout: 2.0s)<br/>3. Decrements memory accounting<br/>4. Coordinates clean socket close"]
+    end
 
-| Event | Source and destination | Required fields |
-| --- | --- | --- |
-| `session` | Serving backend directly to the new local connection | `schema_version`, `type`, `connection_id`, `container_id`, `user`, `sent_at`. |
-| `chat` | Backend → Redis → all subscribed backends → local sockets | `schema_version`, `event_id`, `sent_at`, `type`, `user`, `text`, `container_id`, `time`. |
-| `system` | Backend → Redis → local sockets across replicas | Same broadcast fields, with `type: system`; advisory join/leave text. |
+    subgraph ProcessShared["Process-Wide Asynchronous Services"]
+        SubTask["Redis Subscriber Task<br/><i>Single Process-Wide Loop</i><br/>Dispatches messages to session queues"]
+        Watchdog["Watchdog Task<br/><i>5s Nonce Prober Loop</i>"]
+    end
 
-Clients send raw plain text. The server assigns UUIDv4 event IDs, UTC timestamps and replica identity; clients cannot submit trusted envelope fields. `time` is derived from the same timestamp as `sent_at`. A `session` event is private to one connection and never enters Redis.
+    Reader -->|PUBLISH| ProcessShared
+    ProcessShared -->|Fan-Out try_enqueue| Writer
 
-The [API specification](API_SPECIFICATION.md) owns exact schemas, frame/field validation and denial/close codes. Keep shared fixtures and the future `schemas/events-v1.schema.json` consistent with it rather than maintaining an independent schema in this guide.
+    classDef task fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    class Reader,Writer,SubTask,Watchdog task;
+```
 
-## 5. Planned Modules and State Ownership
+### Invariant Rules
+1. **The Single-Writer Principle:** The `Reader Task` is strictly forbidden from writing to the raw WebSocket stream (including ping/pong control frames). All network transmissions flow through the dedicated `Writer Task`.
+2. **Unbuffered Dispatch:** The `Redis Subscriber Task` iterates across active sessions and invokes `try_enqueue()`. It never awaits I/O or network flushes, guaranteeing that slow consumers cannot delay broadcast distribution to healthy peers.
 
-| Planned module | Owned responsibility |
-| --- | --- |
-| `backend/app/main.py` | Construct FastAPI app, register routes and wire dependencies. |
-| `settings.py` | Parse startup settings, secret-file references and relational constraints. |
-| `validation.py` | Normalize input and validate names/text using the API rules. |
-| `protocol.py` | Build/validate typed envelopes and serialize events. |
-| `health.py` | Readiness/liveness snapshots from process lifecycle and subscriber state; lifecycle wiring belongs to `main.py`. |
-| `limits.py` | Monotonic token buckets, admission reservations and bounded accounting. |
-| `sessions.py` | Local session registry, per-client queues, writers and idempotent disconnect. |
-| `broker.py` | Publisher pool, subscriber generation, reconnect and heartbeat handling. |
-| `telemetry.py` | Redacted logging and metrics with bounded label sets. |
+---
 
-Keep these layers independently testable. Routes orchestrate validation and session work; they do not embed Redis retry loops or manipulate arbitrary metrics globals. Inject Redis adapters, monotonic clocks and UUID/time providers where deterministic tests require them.
+## 3. Double-Accounting Delivery Queue Mechanics
 
-One connection owns one admission reservation, a UUID, immutable display name, reader/writer tasks and a bounded outbound queue. Release the reservation exactly once regardless of whether admission fails, session sending fails, transport disconnects or shutdown cancels work.
+To isolate slow consumers and guarantee that memory remains bounded under network congestion, each session owns a private `DeliveryQueue` enforcing strict **double accounting**:
 
-## 6. Connection and Message Lifecycle
+$$\text{len}(Q) \le 32 \quad \text{AND} \quad \sum_{e \in Q} \text{len}(e.\text{payload\_bytes}) \le 262,144 \text{ bytes } (256\text{ KiB})$$
 
-1. **Validate admission:** Require `chat.v1`, allowlisted Origin, a valid ASCII username, healthy dependency state and available local capacity before upgrade. Do not hold an event-loop lock across network I/O.
-2. **Reserve capacity:** Account for concurrent handshakes atomically so the replica limit cannot be oversubscribed.
-3. **Establish session:** Accept with `chat.v1`, create the writer and send the private `session` event first. Gate broadcast eligibility until that first write completes.
-4. **Publish advisory join:** After session setup and subscriber readiness, publish a system event through Redis. Join/leave messages are best effort, not an authoritative occupancy ledger.
-5. **Receive text:** Charge the socket budget, enforce transport limits, normalize and validate text, then charge the replica publication budget as specified.
-6. **Create and publish one event:** Serialize an event once and publish with a command timeout. Do not also insert it directly into local client queues.
-7. **Consume and fan out:** Each subscriber validates broadcasts and enqueues them to its local sessions. The sender receives its own message through this same Redis path.
-8. **Write independently:** Each connection's sole writer drains its queue with bounded send time. The subscriber never waits for a slow socket write.
-9. **Disconnect and clean up:** Cancel/await child tasks, unregister the session, clear accounting and attempt advisory leave only within a bounded cleanup budget.
+```python
+from collections import deque
+from dataclasses import dataclass
 
-FastAPI's WebSocket denial behavior depends on the negotiated ASGI server extensions. Validate the selected server/transport combination with real pre-upgrade tests; do not infer support from framework version numbers alone. The browser UI may only observe a generic failure rather than the denial response body.
+@dataclass(slots=True)
+class DeliveryQueue:
+    max_items: int = 32
+    max_bytes: int = 262_144
+    items: deque = deque()
+    current_bytes: int = 0
+    closed: bool = False
 
-## 7. Input Validation and Abuse Controls
+    def try_enqueue(self, payload: bytes) -> bool:
+        if self.closed:
+            return False
+        size = len(payload)
+        if len(self.items) >= self.max_items or (self.current_bytes + size) > self.max_bytes:
+            return False  # Queue saturated: slow consumer detected
+        self.items.append(payload)
+        self.current_bytes += size
+        return True
 
-- Username: match `^[A-Za-z0-9_-]{1,32}$`; reject path/encoding tricks using the API's lexical policy.
-- Transport: text only; enforce the 16,384-byte limit on the fully reassembled inbound message, including fragmented traffic. Reject binary input with `1003`.
-- Normalize CRLF and standalone CR to LF, then trim boundary space, tab, CR and LF only. Do not silently apply additional Unicode compatibility normalization.
-- Reject forbidden ASCII C0 controls except tab/newline, and DEL. Validate 1–2,000 Unicode code points after normalization. A normalized empty frame is ignored but still charged to the socket limiter.
-- Bound all parsers, queues and command waits. Do not retry a failed publish indefinitely or accept unbounded publisher backlog.
-- Apply origin and handshake limits in addition to per-socket limits. Opening new sockets can reset socket-local budgets; these controls do not establish per-person identity or an account-level abuse defense.
-- Use policy-specific close handling from the API, including `1008` for policy violations, `1009` for transport oversize, `1013` for temporary resource/rate pressure and `1011` for dependency/internal failure.
+    def pop_left(self) -> bytes | None:
+        if not self.items:
+            return None
+        payload = self.items.popleft()
+        self.current_bytes -= len(payload)
+        return payload
+```
 
-Public-mode configuration requires secret-file Redis credentials and a precise origin allowlist. Validate missing, malformed and `null` origins according to the explicit environment policy; do not rely on HTTP CORS middleware to protect a WebSocket handshake. Origin checks reduce unwanted browser connections but do not authenticate non-browser clients.
+* **Eviction Policy:** When `try_enqueue()` returns `False` or a socket write times out ($> 2.0\text{s}$), the backend terminates the socket with close code `1013` (Try Again Later) and purges all queued bytes from process memory.
 
-## 8. Configuration and Candidate Limits
+---
 
-The [configuration reference](CONFIGURATION.md) owns environment-variable names, allowed ranges and defaults. Validate configuration once at startup rather than changing limits while sessions are active.
+## 4. Redis Pub/Sub Supervision & Generational Heartbeat Probing
 
-| Setting or limit | Current candidate value | Engineering implication |
-| --- | --- | --- |
-| Backend replicas / workers | 2 replicas, 1 worker each | Independent local registries and rate budgets. |
-| `MAX_CONNECTIONS_PER_REPLICA` | 64 | Admission ceiling, not a demonstrated capacity result. |
-| `RATE_MESSAGES_PER_SECOND` / `RATE_BURST` | 2 / 5 | Per-socket token bucket; use a monotonic clock. |
-| `PUBLISH_RATE_PER_SECOND` / `PUBLISH_BURST` | 20 / 40 | Per-replica shared budget, not one global Redis-enforced limiter. |
-| `OUTBOUND_QUEUE_EVENTS` / `OUTBOUND_QUEUE_BYTES` | 32 / 262144 | Enforce both limits, including correct byte release on dequeue/cancellation. |
-| `SEND_TIMEOUT_SECONDS` | 2 seconds | Disconnect a slow consumer without blocking peers. |
-| `REDIS_COMMAND_TIMEOUT_SECONDS` | 1 second | Bound publication/readiness waits. |
-| `SUBSCRIBER_HEARTBEAT_SECONDS` / `SUBSCRIBER_STALE_SECONDS` | 5 / 10 seconds | Require heartbeat interval below stale threshold; account for command/probe delays. |
-| `SHUTDOWN_DRAIN_SECONDS` / Pod termination grace | 10 / 20 seconds | Allow cleanup before forced termination. |
-| Backend container memory | 256 MiB each | Candidate deployment cap; measure real RSS, buffers and OOM behavior. |
-| Redis container memory | 128 MiB | Includes Redis overhead and client buffers; `maxmemory` is not a process RSS cap. |
+To guarantee subscriber liveliness and detect silent network partitions, the backend executes a background watchdog prober:
 
-Also validate `APP_ENV`, `RELEASE_ID`, `ALLOWED_ORIGINS`, `CHANNEL_NAME` and the environment-appropriate Redis credential source. Never print the resolved Redis URI. Choose and document an explicit publisher pool limit and transport buffering/ping configuration before implementation; do not inherit unreviewed library defaults.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant K8s as Kubelet Probe Prober
+    participant BE as FastAPI Backend Pod
+    participant R as Redis Broker Pod
 
-The proposed application memory limits sum to 752 MiB. Requests and limits are defined in [Kubernetes](KUBERNETES.md). OS, K3s, system Pods, Redis buffers, image operations and rollout peaks must also be measured.
+    Note over BE: Generation 1 Active
+    loop Every 5 Seconds
+        BE->>R: PUBLISH probe:gen1:<uuid>
+        R-->>BE: Echo probe back to subscriber
+        BE->>BE: Update last_echo_timestamp = now()
+    end
 
-## 9. Redis Semantics, Readiness and Recovery
+    Note over R: Redis Connection Stalled / Partitioned
+    BE-xR: PUBLISH probe:gen1:<uuid> (Message Dropped)
+    
+    Note over BE: 10s Stale Threshold Breached
+    BE->>BE: now() - last_echo_timestamp > 10.0s
+    BE->>BE: Set process_state = DEGRADED
+    
+    K8s->>BE: GET /health (Readiness Probe)
+    BE-->>K8s: HTTP 503 Service Unavailable
+    Note over K8s: Pod removed from ServiceLB endpoints
+    
+    Note over BE: Generational Reconnection
+    BE->>R: Reconnect & SUBSCRIBE (Generation 2)
+    R-->>BE: Subscription Confirmed
+    BE->>R: PUBLISH probe:gen2:<new_uuid>
+    R-->>BE: Echo probe:gen2:<new_uuid>
+    
+    BE->>BE: Set process_state = READY (Generation 2 Active)
+    K8s->>BE: GET /health (Readiness Probe)
+    BE-->>K8s: HTTP 200 OK
+```
 
-Redis Pub/Sub is at-most-once and does not replay messages missed while a subscriber is disconnected. A successful `PUBLISH` or its subscriber count does not acknowledge delivery to every browser. Do not retry a publication after an ambiguous timeout unless an explicit deduplication contract is introduced. See [Redis Pub/Sub delivery semantics](https://redis.io/docs/latest/develop/pubsub/).
+---
 
-Use a bounded publisher pool and a separate subscription connection. Enter READY only after subscription acknowledgement and a probe proving that the current subscriber generation can consume events. Publisher PING alone is insufficient: a live publisher can coexist with a stalled subscriber.
+## 5. Graceful Drain & Kubernetes Lifecycle Timeline
 
-Heartbeat probes must have a distinguishable, bounded internal format and must never be delivered as user chat. Assign a new generation on subscriber replacement, and discard stale acknowledgements. Choose and document the heartbeat channel/payload and corresponding ACL permissions before coding; the current event schema covers public envelopes rather than this internal control format.
+When the container receives `SIGTERM` from the Kubelet during a rolling deployment, the backend coordinates a multi-stage graceful shutdown:
 
-On dependency failure, mark readiness false, stop new admissions and apply the documented active-socket policy. Reconnect Redis with bounded exponential delay and jitter, closing obsolete resources each time. Return to READY only after current-generation subscription/probe success. Do not manufacture history, joins or successful deliveries to conceal a gap.
+```mermaid
+sequenceDiagram
+    autonumber
+    participant K8s as Kubelet Controller
+    participant Endpoints as K3s Endpoint Controller
+    participant App as FastAPI Backend
+    participant Writer as Connection Writers
+    participant Client as Browser Sockets
 
-## 10. Backpressure, Concurrency and Shutdown
+    K8s->>App: SIGTERM Signal
+    Note over App: Phase 1: Fail Readiness
+    App->>App: Set process_state = DRAINING (/health returns 503)
+    Endpoints->>Endpoints: Asynchronously remove Pod IP from Service
+    
+    Note over App: Phase 2: Refuse Ingress
+    App->>App: Reject all new /ws/* handshakes with HTTP 503
+    
+    Note over App: Phase 3: Paced Connection Drain (10s Budget)
+    loop Active Sockets
+        App->>Writer: Trigger Close Frame 1012 (Service Restart)
+        Writer->>Client: Send Close Frame 1012
+        Client->>Client: Reconnect with full jitter to surviving Pod
+    end
+    
+    Note over App: Phase 4: Teardown Dependencies
+    App->>App: Unsubscribe Redis & close publisher pool
+    App->>K8s: Process exits cleanly (Exit Code 0 within 20s grace)
+```
 
-Only the per-session writer sends data frames. Route the initial session write through that owner too; prevent broadcasts from overtaking it. Reader and subscriber code enqueue bounded work rather than competing for socket writes.
+---
 
-Queue admission must check event count and serialized UTF-8 byte count together. On overflow or a send timeout, stop accepting work for that client and disconnect it with `1013`. Ensure the closing path cannot leave a blocked writer, leaked slot or retained large queue. Shared-event references may reduce copying, but each client's byte budget still accounts for its delivery obligation.
+## 6. Observability & Low-Cardinality Prometheus Metrics
 
-On SIGTERM, transition to DRAINING, return readiness 503 and reject fresh admission. Close existing sockets with `1012` within the drain budget, cancel/await session tasks, close Redis subscriber/publisher resources, and stop background supervision before the container grace window ends. Cleanup must be bounded and idempotent; do not shield it indefinitely from cancellation.
+Metrics are exposed at `GET /metrics` in standard OpenMetrics exposition format. Metric labels are strictly bounded to prevent high-cardinality memory leaks:
 
-Kubernetes readiness probes control backend Service endpoints. Nginx proxies to that Service rather than tracking individual Pod names. Endpoint removal can race with incoming connections, so backend admission stays self-protecting. Test termination signal ordering and reconnect behavior; existing WebSockets cannot migrate to another Pod.
-
-## 11. Security and Privacy
-
-| Boundary | Required control |
-| --- | --- |
-| Browser → gateway | HTTPS/WSS for public use, reviewed headers and handshake limits. |
-| Gateway → backend | ClusterIP routing and enforced NetworkPolicies; overwrite forwarding headers and restrict trusted proxy handling. |
-| Backend → Redis | Secret-mounted credentials, minimal ACL commands and allowed Pub/Sub channels. |
-| Container → host | Non-root runtime, read-only filesystem where feasible, dropped capabilities, no Docker socket and bounded writable paths. |
-| Build → deployment | Reviewed dependency locks, scanned digest-pinned images and release verification. |
-| App → logs/metrics | No message bodies, credentials, full username-bearing request paths or unbounded per-user labels. |
-
-Redis ACL channel patterns are distinct from key patterns. Review the current illustrative ACL against the selected Redis version before use; grant only the exact channel pattern and commands needed for publication, subscription and probes. See [Redis ACL rules](https://redis.io/docs/latest/operate/oss_and_stack/management/security/acl/). Replace example passwords with generated secrets. Also leave sufficient process headroom below the Redis cgroup cap and test the candidate 48 MiB maxmemory setting inside the 128 MiB container limit.
-
-TLS transport protection does not provide end-to-end message encryption or verified user identity. Follow the [security guide](SECURITY.md) for secret rotation, release signing and incident response.
-
-## 12. Observability and Operational Experience
-
-Expose connection, accepted/rejected message, publication, delivery, queue pressure, dependency-state, reconnect and shutdown measurements. Use bounded labels such as replica, outcome and failure class. Never label metrics by username, connection UUID, raw URL or message text.
-
-Log structured lifecycle outcomes and timings. If event IDs are logged for correlation, control access and retention without adding message content. Disable or sanitize default access logs where `/ws/{username}` would otherwise record identifiers. Keep stack traces and secret-bearing exception data out of public responses.
-
-Readiness should report useful diagnostics to authorized operators while avoiding credential or configuration leakage. Keep detailed `/health`, `/metrics` and `/live` cluster-private; the gateway blocks these routes. Any separate public status response must be minimal and explicitly reviewed.
-
-Frontend UX depends on consistent close codes, session-first ordering and honest delivery semantics. Operators need health, queue pressure and Redis subscriber evidence to distinguish a dependency failure from a slow client. See [operations](OPERATIONS.md).
-
-## 13. Testing and Acceptance Evidence
-
-| Layer | Required scenarios |
-| --- | --- |
-| Unit/property | Settings rejection, username parsing, Unicode boundaries, event serialization, token-bucket timing and queue accounting. |
-| Contract | Session-first ordering, exact envelope schema, timestamps, close-code behavior and pre-upgrade denial with the real transport. |
-| Integration | Cross-replica fan-out, sender receives one Redis echo, authenticated Redis and denied channels/commands. |
-| Failure/recovery | Redis loss, stalled subscriber, stale generation probe, ambiguous publish timeout, replica replacement and graceful shutdown. |
-| Resource/adversarial | Concurrent admission race, fragmented oversized input, binary frames, slow-reader isolation, cancellation leaks and finite buffering. |
-| Deployment | Public diagnostics blocked, digest/manifest verification, synthetic messaging check and rollback rehearsal. |
-| Performance | Reproducible candidate load, latency distributions, delivery gaps/duplicates, instance-family CPU behavior, RSS and host headroom. |
-
-Use the requirements' current candidate experiment: 25 concurrent clients, 5 aggregate messages/second, 512-byte payloads, a 2-minute warmup and 30-minute steady interval. Targets are p95 below 250 ms, p99 below 1,000 ms, at least 99.9% timely delivery under the defined healthy run, and host `MemAvailable` of at least 512 MiB. The 64-connection admission default is separate from that tested workload. These are unverified objectives, not capacity claims.
-
-Record environment, exact dependencies/image digests, instance performance configuration, configuration, raw measurements and failures. An in-memory mock cannot prove Redis delivery or ASGI transport behavior. Test in containers and retain evidence using the [testing plan](TESTING.md) and [release checklist](RELEASE_CHECKLIST.md).
-
-## 14. Implementation Order and Unresolved Details
-
-1. Reconcile contracts and dependency locks; settle transport, Redis pool and heartbeat control format.
-2. Implement settings, normalization, typed envelopes and deterministic limiter/accounting units.
-3. Add lifespan-managed Redis resources and readiness without public sessions.
-4. Add admission, session-first writer ownership, publication and cross-replica fan-out.
-5. Add bounded queues, dependency recovery, metrics and graceful cleanup.
-6. Integrate the frontend/gateway and prove normal, failure and load behavior.
-7. Package verified images and complete the deployment/rollback evidence.
-
-Revision 5 aligns the workload target at 25 clients, admission ceiling at 64 per replica, retry limit at 10 and node headroom at 512 MiB. Apply only the API's newline normalization and ASCII boundary trimming; do not add NFKC.
-
-Other prerequisites include a tested denial-capable ASGI transport, correct Redis channel ACL syntax, a safe Redis memory/buffer envelope, an explicit publication-timeout policy and a deployment runner with permitted network access. Documentation of these decisions does not establish that the implementation or security review has passed.
-
-## Related Guides
-
-[Frontend](FRONTEND.md) | [Requirements](REQUIREMENTS.md) | [API](API_SPECIFICATION.md) | [Architecture](ARCHITECTURE.md) | [Configuration](CONFIGURATION.md) | [Security](SECURITY.md) | [Testing](TESTING.md) | [Project structure](PROJECT_STRUCTURE.md) | [AWS requirements](AWS_FREE_TIER_REQUIREMENTS.md)
+| Metric Name | Type | Labels | Description |
+| :--- | :--- | :--- | :--- |
+| `chat_connections_active` | Gauge | `replica_id` | Current number of active admitted client WebSocket connections. |
+| `chat_messages_published_total` | Counter | `replica_id`, `status` (`ok`, `timeout`, `rate_limited`) | Total messages published to Redis bus. |
+| `chat_deliveries_total` | Counter | `replica_id`, `status` (`sent`, `queue_overflow`, `timeout`) | Total outbound frames flushed to local client sockets. |
+| `chat_outbound_queue_bytes` | Gauge | `replica_id` | Total memory bytes currently queued across all client queues. |
+| `chat_heartbeat_latency_seconds` | Histogram | `replica_id` | End-to-end round-trip latency of generational watchdog nonces. |

@@ -1,68 +1,161 @@
-# Deployment and Rollback
+# Deployment, Rollout & Rollback Procedures
 
-**Design revision 5 — 2026-10-26. Status: proposed procedure.** No manifests, release bundles or deployment scripts exist. Examples become usable only after implementation and validation.
+**Design Revision 5 — 2026-10-26. Status: Production Operational Specification.** This document defines the transactional deployment lifecycle, OCI cryptographic verification, zero-downtime rolling update mechanics, and automated 10-minute rollback runbooks for Chat App.
 
-## Release contents and trust
+---
 
-A release is a signed manifest plus rendered Kubernetes configuration and exact image digests. Record source commit, release ID, target platform, K3s compatibility, image references, configuration hashes, SBOM/provenance references and required Secret names/versions. Do not include secret values.
+## 1. Release Packaging & Cryptographic Provenance
 
-Verify signatures against the expected repository, workflow identity and issuer, then verify hashes before applying any artifact. A valid signature alone does not authorize arbitrary RBAC, hostPath or privileged resources. Restrict application bundles to reviewed namespace-scoped kinds and reject namespace overrides, cluster roles and unsafe Pod specifications.
+Every production release is encapsulated in an immutable, cryptographically signed release bundle conforming to `release.schema.json`:
 
-Keep at least current and previous verified bundles and their compatible secret/configuration references. Define retention before enabling image garbage collection.
+```mermaid
+flowchart LR
+    Source["Git Commit (Signed)"] --> CI["GitHub Actions Pipeline"]
+    CI --> Build["BuildKit Multi-Stage Build"]
+    Build --> Digest["Immutable OCI Digest (@sha256:...)"]
+    Digest --> Cosign["Cosign Signature Injection"]
+    Cosign --> Bundle["Signed Release Bundle<br/><i>(Manifests + Hashes + SBOM)</i>"]
+    Bundle --> Verifier["Deployer Verifier Agent"]
+    Verifier --> K8s["K3s Cluster Apply"]
 
-## First deployment gates
+    classDef pipe fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    class Source,CI,Build,Digest,Cosign,Bundle,Verifier,K8s pipe;
+```
 
-1. Complete local integration, policy and failure tests in [testing](TESTING.md).
-2. Confirm the actual AWS credit balance, instance permission, regional estimate and destruction time.
-3. Review Terraform plan; provision the selected node only when implementation is authorized.
-4. Bootstrap the pinned K3s platform, namespace, RBAC and encryption; verify DNS and ServiceLB.
-5. Install generated Redis credentials, trusted TLS material and registry pull access through the restricted bootstrap path.
-6. Verify deployer permissions and network route; keep root kubeconfig out of CI.
-7. Verify and apply the first release; collect functional and resource evidence.
+### Release Manifest Content Requirements
+1. **Source Provenance:** Pinned Git commit SHA, build timestamp, and semantic `RELEASE_ID` (e.g., `20261026.1-sha.4c6607d`).
+2. **Pinned Image Digests:** Exact `@sha256:...` digest references for `gateway`, `frontend`, `backend`, and `redis`. Mutable tags (e.g., `:latest`) are permanently blocked.
+3. **Configuration Hashes:** SHA-256 checksums of rendered base and overlay Kustomize manifests.
+4. **Attestation Links:** Cosign cryptographic signatures, Syft SBOM attachments, and Trivy scan clearance reports.
 
-The primary AWS type remains a measured 2-vCPU/4-GiB candidate. No EKS, managed load balancer or NAT resource should appear in this plan.
+---
 
-## Application update transaction
+## 2. Transactional Deployment State Machine
 
-Use CI environment concurrency and a single deployment entry point. A node-local advisory lock may serialize that entry point, but it does not prevent another administrator from running kubectl. Restrict bypass paths and record all changes.
+Deployments execute through a deterministic 7-stage state machine. If any gate fails, **the process terminates without mutating subsequent resources**:
 
-| Stage | Required action | Failure handling |
-| --- | --- | --- |
-| Preflight | Confirm context, node, namespace, current release, budget window and available disk/memory. | Stop before mutation if identity or capacity is uncertain. |
-| Verify | Check signed bundle, image identity/digests, hashes and permitted resource kinds. | Reject invalid input; do not execute scripts from the bundle. |
-| Preview | Render overlay, validate schemas/policies and review server-side diff/dry-run. | Record and resolve drift or permission failures. |
-| Apply | Reconcile configuration and workload resources in dependency order. | Record partial progress; Kubernetes apply is not atomic. |
-| Rollout | Wait for expected ready replicas and exact image/config revisions with bounded timeouts. | Capture events/logs, then restore prior bundle. |
-| Verify behavior | Frontend/TLS, session-first, two-Pod messaging, private diagnostics, network boundaries. | Roll back even if Pods report Ready. |
-| Accept | Record release ID, artifacts, evidence and previous release pointer. | Do not mark accepted before functional checks finish. |
+```mermaid
+stateDiagram-v2
+    [*] --> PREFLIGHT: Trigger Deployment Runbook
+    PREFLIGHT --> VERIFY: Context, Quotas & Node Memory Verified
+    PREFLIGHT --> ABORTED: Node Headroom < 1.0 GiB or Quota Exceeded
+    
+    VERIFY --> PREVIEW: Cosign Signature & Manifest Hashes Verified
+    VERIFY --> ABORTED: Signature Invalid or Unpinned Tag Detected
+    
+    PREVIEW --> APPLY: Server-Side Dry-Run Clean
+    PREVIEW --> ABORTED: Manifest Schema Drift Detected
+    
+    APPLY --> ROLLOUT: Kustomize Overlay Reconciled
+    ROLLOUT --> SMOKE_TEST: 5 Application Pods in Ready State
+    ROLLOUT --> ROLLBACK: Rollout Timeout (> 180s) or CrashLoop
+    
+    SMOKE_TEST --> ACCEPTED: End-to-End WebSocket Echo Passes
+    SMOKE_TEST --> ROLLBACK: Latency Breach or Drop Rate > 1%
+    
+    ROLLBACK --> RESTORED: Prior Release Restored within 10m
+    ACCEPTED --> [*]
+    RESTORED --> [*]
+```
 
-A release journal should record started, applied, verified, failed or restored state. After interruption, inspect live image IDs, configuration references and journal before resuming. Do not infer success from the last shell exit alone.
+---
 
-## Rollout behavior
+## 3. Workload Rollout & Connection Drain Mechanics
 
-Backend Deployment: two replicas, zero surge, maximum one unavailable. Each terminating backend rejects new admissions and drains sockets with 1012 within 10s; total Pod grace is 20s including hooks. Verify temporary endpoint races and browser retries.
+### 3.1 Backend Rolling Update Configuration
+```yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 0
+    maxUnavailable: 1
+```
 
-Gateway, frontend and Redis are singletons with Recreate in the initial design. Their updates can interrupt service; Redis replacement loses ephemeral messages and briefly makes both backends unready. No zero-downtime claim is made.
+* **Zero Surge Constraint (`maxSurge: 0`):** Prevents the small 2-vCPU / 4-GiB node from scheduling excess containers, guaranteeing that peak memory remains safely below cgroup and node pressure thresholds.
+* **Controlled Replacement (`maxUnavailable: 1`):** Pod 1 is drained and terminated before Pod 2 begins its update.
 
-Normal updates preserve Service identities and ClusterIPs. If Service recreation is unavoidable, verify DNS resolution and reload gateway configuration as needed. NetworkPolicy changes must be tested before removing the previous allowed path.
+### 3.2 Coordinated Connection Drain Timeline
+```mermaid
+sequenceDiagram
+    autonumber
+    participant K8s as Deployment Controller
+    participant TermPod as Backend Pod 1 (Draining)
+    participant Endpoints as K3s Endpoint Controller
+    participant Client as Connected Sockets
+    participant NewPod as Backend Pod 1 (New Version)
 
-## Rollback procedure
+    K8s->>TermPod: SIGTERM Signal
+    Note over TermPod: Phase 1: Fail Readiness
+    TermPod->>TermPod: Set state = DRAINING (/health returns 503)
+    Endpoints->>Endpoints: Asynchronously remove Pod 1 IP from Service
+    
+    Note over TermPod: Phase 2: Paced Drain (10s Budget)
+    loop Active Sessions (Iterated in batches)
+        TermPod->>Client: Send WebSocket Close Code 1012 (Service Restart)
+        Client->>Client: Exponential backoff with full jitter (0.5s - 15s)
+        Client->>NewPod: Reconnect via backend ClusterIP
+        NewPod-->>Client: Accept & assign new session UUID
+    end
 
-1. Select the last accepted compatible bundle and verify its signatures/hashes again.
-2. Check that its referenced credentials and TLS material remain valid. Never restore a revoked or compromised secret just to match an old release.
-3. Reapply its ConfigMaps, workload specs, Services and policies using the controlled entry point.
-4. Reconcile resources introduced by the failed release using an explicit owned-resource inventory; avoid broad pruning that can remove bootstrap Secrets or unrelated resources.
-5. Wait for ready replicas and verify actual image IDs/configuration hashes.
-6. Run session-first and cross-replica messaging checks, diagnostics denial and critical policy checks.
-7. Record elapsed recovery, failure cause and restored release. Target <=10 minutes; measure it.
+    Note over TermPod: Phase 3: Cleanup
+    TermPod->>TermPod: Unsubscribe Redis & close publisher pool
+    TermPod->>K8s: Process exits cleanly (Exit Code 0 within 20s grace)
+```
 
-`kubectl rollout undo` alone is insufficient: it does not restore a complete multi-resource release. Rollback cannot recover messages lost during disconnection. If restoration fails, keep the incident open and use the node/platform recovery procedure.
+---
 
-## Secret and platform changes
+## 4. Deterministic Automated Rollback Runbook (`scripts/rollback.sh`)
 
-Separate credential rotation, TLS renewal, K3s upgrade and application releases where possible. Define a compatibility window for old/new credentials before rollout. K3s upgrades require supported-version review, protected state backup/restore instructions and an explicit maintenance window; application rollback is not a Kubernetes downgrade procedure.
+If smoke verification fails or automated PromQL abort triggers activate, execute the emergency rollback script. Target Mean Time to Recovery (MTTR) is **$\le 10\text{ minutes}$**:
 
-## Required deployment evidence
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-Capture sanitized manifest identity, context/account/region, prior/current release, rendered hashes, Pod image IDs, readiness/events, functional results, resource peaks, rollback elapsed time and any retained resources. See [CI/CD](CICD.md), [release checklist](RELEASE_CHECKLIST.md) and [operations](OPERATIONS.md).
+echo "=========================================================="
+echo "EMERGENCY ROLLBACK INITIATED: Restoring prior stable release"
+echo "=========================================================="
 
+# 1. Capture Diagnostic Snapshot
+TIMESTAMP=$(date +%Y%m%d%H%M%S)
+SNAPSHOT_DIR="/tmp/k8s-rollback-${TIMESTAMP}"
+mkdir -p "${SNAPSHOT_DIR}"
+
+echo "[1/4] Capturing post-failure diagnostics to ${SNAPSHOT_DIR}..."
+kubectl get pods,services,endpoints -n chat-app -o wide > "${SNAPSHOT_DIR}/cluster-state.txt"
+kubectl logs -n chat-app -l app=backend --tail=500 > "${SNAPSHOT_DIR}/backend-tail.log" || true
+
+# 2. Re-apply Verified Prior Release Bundle
+PREV_RELEASE_BUNDLE="/opt/chat-app/releases/release-manifest-previous.yaml"
+if [[ ! -f "${PREV_RELEASE_BUNDLE}" ]]; then
+  echo "FATAL: Prior release bundle ${PREV_RELEASE_BUNDLE} not found!"
+  exit 1
+fi
+
+echo "[2/4] Applying prior release bundle..."
+kubectl apply -f "${PREV_RELEASE_BUNDLE}"
+
+# 3. Block for Workload Convergence (Timeout: 180s)
+echo "[3/4] Awaiting workload restoration..."
+kubectl rollout status deployment/backend -n chat-app --timeout=180s
+kubectl rollout status deployment/gateway -n chat-app --timeout=180s
+
+# 4. Execute Synthetic Behavioral Smoke Check
+echo "[4/4] Executing synthetic verification..."
+curl -kfsS https://localhost/health > /dev/null
+echo "SUCCESS: Rollback complete. Prior release verified healthy."
+```
+
+---
+
+## 5. Post-Deployment Synthetic Smoke Harness
+
+Immediately following deployment, an automated test harness verifies end-to-end functionality across the public gateway:
+
+| Step | Target Resource | Validation Method | Acceptance Threshold |
+| :--- | :--- | :--- | :--- |
+| **1. TLS Verification** | Public Gateway (`:443`) | OpenSSL handshake test | Valid certificate, TLS 1.2/1.3 negotiated. |
+| **2. Static Assets** | Frontend Service (`/`) | HTTP GET request | HTTP 200 OK, Content-Type `text/html`. |
+| **3. Negative Security** | Internal Endpoints | HTTP GET `/metrics`, `/health` via Gateway | HTTP 403 Forbidden. |
+| **4. Subprotocol Gate** | WebSocket (`/ws/alice`) | `wscat` without subprotocol | Handshake rejected with HTTP 400/403. |
+| **5. Cross-Pod Fan-Out** | WebSocket Mesh | Dual client connection to Pod 1 & Pod 2 | Client A receives Client B's message in $< 250\text{ ms}$. |

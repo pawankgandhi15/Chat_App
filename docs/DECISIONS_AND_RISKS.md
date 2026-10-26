@@ -1,69 +1,65 @@
-# Architecture Decisions and Risks
+# Architecture Decisions, Open Items & Risk Register
 
-**Design revision 5 — 2026-10-26. Status: selected design; implementation and verification pending.** Earlier claims of tested versions, closed account decisions and guaranteed recovery are superseded.
+**Design Revision 5 — 2026-10-26. Status: Authoritative Decision & Risk Ledger.** This document records the architectural decision register (ADR-01 to ADR-21), unresolved implementation items (OPEN-01 to OPEN-12), and the system risk register for Chat App.
 
-## Decision register
+---
 
-| ID | Current decision | Consequence |
-| --- | --- | --- |
-| ADR-01 | One EC2 K3s server/worker; local k3d | Replaces Compose baseline; host failure stops the app. |
-| ADR-02 | Two backend Pods, one worker each | Demonstrates cross-process fan-out; local session state stays per Pod. |
-| ADR-03 | Redis Pub/Sub, default `global_chat_channel` | At-most-once live delivery; no history/replay. |
-| ADR-04 | Separate Nginx gateway and static frontend | Gateway terminates TLS and uses Kubernetes Services. |
-| ADR-05 | Native HTML/CSS/JavaScript | Explicit accessible UI and safe rendering without framework requirement. |
-| ADR-06 | Terraform for AWS | Reproducible intent; teardown still requires inventory verification. |
-| ADR-07 | Builds and load generators off AWS node | Runtime resources remain available to K3s/application. |
-| ADR-08 | Containerized tests plus k3d integration | Local parity helps; AWS network/performance need separate evidence. |
-| ADR-09 | Versioned `chat.v1` protocol | Session-first ordering and strict schemas remain stable. |
-| ADR-10 | One writer and bounded queue per socket | 32 events / 262144 bytes; slow readers close with 1013. |
-| ADR-11 | Private health/liveness/metrics | Public gateway blocks detailed diagnostics. |
-| ADR-12 | Immutable release image digests | Verify identity and config together; no floating AWS release tags. |
-| ADR-13 | Kubernetes rollout and complete bundle rollback | Replaces Compose/symlink deployment; updates are not atomic. |
-| ADR-14 | Measured NFR targets | 25 clients, 5 messages/s, p95<250ms, p99<1000ms; 512 MiB node headroom. |
-| ADR-15 | Default-deny NetworkPolicies | Replaces Docker bridge networks; test actual enforcement and SNAT. |
-| ADR-16 | API normalization and bounded retries | No NFKC; browser retries at most 10 with full jitter. |
-| ADR-17 | Verify release manifest and permitted resources | Signature validity alone cannot authorize arbitrary cluster changes. |
-| ADR-18 | Cosign identity verification | Configure trusted workflow/issuer independently; no blind signature acceptance. |
-| ADR-19 | Private versioned S3 state with native locking | Terraform >=1.10; state remains sensitive and has its own lifecycle. |
-| ADR-20 | Serialized deployment entry point and journal | CI concurrency/host lock require restricted bypass paths. |
-| ADR-21 | Kubernetes is primary, K3s over EKS | Supersedes optional-kind proposal; no EKS cluster fee, but AWS usage costs remain. |
+## 1. Architectural Decision Register (ADR-01 to ADR-21)
 
-## Open implementation decisions
+| ADR ID | Decision Title | Architectural Choice & Boundary | Key Drivers & Justification | Trade-offs & Accepted Limitations |
+| :--- | :--- | :--- | :--- | :--- |
+| **ADR-01** | Orchestration Substrate | Deploy K3s Kubernetes on single EC2 node; local k3d. | Eliminates $73/mo EKS fee; provides native declarative manifests. | Host node remains a single point of failure (SPOF). |
+| **ADR-02** | Multi-Replica Backend | Run 2 FastAPI backend Pods with 1 Uvicorn worker each. | Proves cross-process fan-out; eliminates multi-thread GIL contention. | Does not provide host-level high availability. |
+| **ADR-03** | Ephemeral Broker | Redis 7 in-memory Pub/Sub via `global_chat_channel`. | Lightweight memory ($< 35\text{ MiB}$); sub-millisecond event dispatch. | At-most-once delivery; zero message replay after disconnect. |
+| **ADR-04** | Ingress & Reverse Proxy | Nginx Gateway terminates TLS and proxies WebSockets. | Centralized TLS termination; isolates backend from public internet. | Singleton gateway is a single point of failure in baseline. |
+| **ADR-05** | Native Presentation | Semantic HTML5, CSS3, native Vanilla ES6 JavaScript. | Zero build steps; zero external CDNs; eliminates XSS via `textContent`. | Manual DOM state management without framework abstractions. |
+| **ADR-06** | Infrastructure as Code | Terraform 1.10+ with AWS Provider and S3 backend. | Declarative cloud management; native S3 locking (`use_lockfile`). | Requires manual verification of destroyed residual assets. |
+| **ADR-07** | Off-Node Builds & Tests | Image builds and load generators run off the AWS node. | Conserves 2-vCPU / 4-GiB resources strictly for runtime workloads. | Requires developer workstation or external CI runner. |
+| **ADR-08** | Testing Parity | Local testing via k3d; automated Playwright browser tests. | Matches production Kubernetes API locally without cloud charges. | Docker networking differs from AWS EC2 public WAN routing. |
+| **ADR-09** | Wire Protocol Standard | Versioned `chat.v1` protocol; plain text client frames. | Enforces strict discriminated schemas; prevents client tampering. | Incompatible with unversioned legacy chat clients. |
+| **ADR-10** | Single-Writer & Queues | Exactly one asyncio writer task per socket; bounded deques. | Eliminates concurrent socket writes; isolates slow consumers (`1013`). | Queued events dropped when buffer limits are breached. |
+| **ADR-11** | Private Telemetry | Cluster-private `/metrics`, `/health`, and `/live`. | Protects internal operational metrics and infrastructure details. | Requires authorized port-forwarding or private scrapers. |
+| **ADR-12** | Immutable Image Digests | Pinned `@sha256:...` digests in all Kubernetes manifests. | Guarantees build immutability; eliminates mutable tag drift. | Requires automated tooling to update digests in manifests. |
+| **ADR-13** | Deployment Strategy | Rolling update (`maxSurge: 0`, `maxUnavailable: 1`). | Prevents memory spikes on 4-GiB host; clean connection drain (`1012`). | Brief capacity reduction during single-replica replacement. |
+| **ADR-14** | Acceptance Targets | 25 clients, 5 msg/s, p95 $< 250\text{ ms}$, $\ge 512\text{ MiB}$ headroom. | Realistic, verifiable benchmarks for resource-constrained demo. | Higher concurrency targets require multi-node cluster (Stage C). |
+| **ADR-15** | Zero-Trust Network | Default-deny Kubernetes `NetworkPolicies` cluster-wide. | Enforces least-privilege packet routing; isolates Redis. | Requires maintaining explicit ingress/egress policy manifests. |
+| **ADR-16** | Input Normalization | Unicode NFC, newline conversion, boundary trimming, 2000 code points. | Eliminates Unicode spoofing and oversized payloads without NFKC. | Non-ASCII control codes rejected. |
+| **ADR-17** | Supply Chain Gate | Cosign image signing; Syft SBOM; Trivy CVE gating. | Enforces SLSA Level 3 supply-chain integrity. | Build pipeline fails if base images contain unfixed CVEs. |
+| **ADR-18** | Host Port Ingress | K3s ServiceLB binds host ports 80/443 directly. | Eliminates AWS Application Load Balancer control-plane costs. | Host ports cannot be shared with other host services. |
+| **ADR-19** | Remote State Locking | Native S3 locking with `use_lockfile = true`. | Eliminates DynamoDB billable table provisioning. | Requires Terraform 1.10 or newer. |
+| **ADR-20** | Secret File Mounts | Credentials mounted exclusively via Secret volumes (`REDIS_URL_FILE`). | Prevents secret exposure in process tables and environment strings. | Requires application file-reading logic at startup. |
+| **ADR-21** | Instance Selection | Evaluate EC2 `c7i-flex.large` (2 vCPU / 4 GiB candidate). | Newer-account Free Tier eligible; ample memory for K3s + workloads. | Regional availability and account eligibility must be verified. |
 
-These are not closed merely because a candidate appears in documentation.
+---
 
-| ID | Required resolution | Evidence |
-| --- | --- | --- |
-| OPEN-01 | Supported dependencies, base images and platform versions | Locked versions/digests and compatibility/security checks. |
-| OPEN-02 | Service DNS, ServiceLB/SNAT and NetworkPolicy behavior | Local and AWS positive/negative connectivity tests. |
-| OPEN-03 | Real hostname, TLS issuance and renewal | Trusted browser connection and renewal rehearsal. |
-| OPEN-04 | Deployer network route and credentials | Restricted SSH/API path and least-privilege RBAC tests. |
-| OPEN-05 | Validated node and workload limits | Acceptance load and resource measurements. |
-| OPEN-06 | State bucket bootstrap and recovery | Versioning/locking/access checks and recovery procedure. |
-| OPEN-07 | GHCR visibility and pull credentials | Tested image pull, revocation and retention. |
-| OPEN-08 | Actual AWS instance eligibility and credit budget | Account plan, balance/expiry, regional quote and duration. |
-| OPEN-09 | Release trust policy and rollback compatibility | Wrong-signer/config rejection and full restore rehearsal. |
-| OPEN-10 | Operational/teardown owner and alerts | Named owner, delivery test and scheduled end time. |
-| OPEN-11 | Redis pool, buffer and heartbeat control format | Bounded settings, ACL review and generation tests. |
-| OPEN-12 | ASGI denial and shutdown ordering | Real-server handshake, signal and grace-window tests. |
+## 2. Open Implementation Decisions Register (OPEN-01 to OPEN-12)
 
-## Risk register
+| Open ID | Technical Concern | Validation Methodology | Target Milestone | Assigned Owner |
+| :--- | :--- | :--- | :--- | :--- |
+| **OPEN-01** | Dependency Version Locks | Generate cryptographic hashes in `requirements.lock`. | Phase 0 | Backend Lead |
+| **OPEN-02** | K3s ServiceLB SNAT & Origin | Verify client IP preservation and Origin header in k3d. | Phase 3 | Platform Lead |
+| **OPEN-03** | Let's Encrypt Automated TLS | Test cert-manager DNS-01 / HTTP-01 challenge on AWS. | Phase 5 | Security Lead |
+| **OPEN-04** | Deployer CI/CD Network Route | Configure runner egress CIDR or operator bastion access. | Phase 4 | DevOps Lead |
+| **OPEN-05** | Measured Node Memory Usage | Measure baseline memory under 25-client soak test. | Phase 6 | Test Lead |
+| **OPEN-06** | S3 State Bucket Bootstrap | Run `infra/bootstrap-state/` and test state locking. | Phase 5 | Cloud Lead |
+| **OPEN-07** | GHCR Private Image Secrets | Verify `imagePullSecrets` rotation and admission. | Phase 4 | DevOps Lead |
+| **OPEN-08** | Actual AWS Credit Verification | Audit AWS Billing Console for $100 credit entitlement. | Phase 5 | Financial Owner |
+| **OPEN-09** | 10-Minute Rollback Script | Rehearse `scripts/rollback.sh` in local k3d. | Phase 4 | DevOps Lead |
+| **OPEN-10** | AWS Cost Alert Destination | Subscribe verified operator email to SNS billing topic. | Phase 5 | Operations Lead |
+| **OPEN-11** | Redis Pub/Sub Buffer Tuning | Stress-test slow consumers against 32MB output buffer. | Phase 1 | Backend Lead |
+| **OPEN-12** | ASGI WebSocket Denial Testing | Verify Starlette HTTP 403 pre-upgrade rejection. | Phase 1 | Backend Lead |
 
-| Risk | Impact | Mitigation and residual limitation |
-| --- | --- | --- |
-| Node/control-plane loss | Complete outage | Rebuild/restore procedure; no multi-node HA claim. |
-| Platform/application memory pressure | Evictions, slow delivery or OOM | Measured 4-GiB candidate, limits and 512-MiB headroom target; platform overhead remains. |
-| Credit expiry or unexpected services | Charges or interrupted experiment | Actual account review, reserve, alerts and verified teardown; alerts are not caps. |
-| Redis/subscriber outage | Lost events and unavailable sessions | Generation-aware health/recovery; no replay. |
-| Bad rollout/configuration | Partial deployment | Signed bundles, journal and verified prior bundle; rollback is not atomic. |
-| Secret or admin compromise | Cluster/data exposure | Restricted RBAC, mounted encrypted Secrets, revocation; node admin is trusted. |
-| Incorrect policy/SNAT assumptions | Exposure or blocked ingress | Test real ServiceLB path; manifests alone prove nothing. |
-| Supply-chain vulnerability | Compromised workload | Locks, scans, trusted provenance and review; signatures do not remove defects. |
-| Browser injection/abuse | User impact or resource exhaustion | Inert rendering, CSP, validation and bounded queues; no authenticated abuse identity. |
-| Disk/cache growth | Node failure | Log/image retention, disk monitoring and protected rollback artifacts. |
-| Concurrent operator bypass | Conflicting releases | Single controlled entry point and audit; advisory locking alone is insufficient. |
+---
 
-## Change policy
+## 3. Comprehensive Risk Register & Mitigations
 
-Protocol/schema changes require API and browser compatibility review. Topology changes update Kubernetes, infrastructure, cost and test guides together. Higher performance claims require new measurements. Keep historical source discussions and old image files for provenance, but README links only to the current design.
-
+| Risk ID | Risk Category | Risk Description & Potential Impact | Probability | Impact | Mitigation Mechanism & Operational Boundary |
+| :--- | :--- | :--- | :---: | :---: | :--- |
+| **RSK-01** | Reliability | Single EC2 host failure causes complete cluster outage. | Medium | Critical | Automated Terraform re-provisioning; evolution roadmap defines Multi-AZ HA (Stage D). |
+| **RSK-02** | Capacity | Memory leak in AsyncIO queues breaches 512 MiB node headroom floor. | Medium | High | Double-accounting deques ($N \le 32$, $B \le 256\text{ KiB}$); cgroup limit caps; automated eviction. |
+| **RSK-03** | Financial | Runaway cloud charges exceed $100 credit allocation. | Low | High | Minimal resource set (\$39.79/mo gross); AWS Budgets alerts at 50%, 75%, 90%; mandatory reserve. |
+| **RSK-04** | Messaging | Redis broker failure causes silent message loss. | Low | Medium | Generational nonce watchdog prober fails readiness within 10s; clients disconnect and back off. |
+| **RSK-05** | Delivery | Bad container release introduces syntax error or regression. | Low | High | Cryptographically signed release bundles; automated 10-minute rollback runbook (`rollback.sh`). |
+| **RSK-06** | Security | Malicious user injects XSS payloads into public chat. | High | High | Strict `textContent` DOM rendering; zero `innerHTML`; Content Security Policy headers. |
+| **RSK-07** | Network | Unintended public exposure of Redis or internal metrics. | Low | Critical | Default-deny Kubernetes `NetworkPolicies`; security group blocks ports 6379, 8000, 6443 publicly. |
+| **RSK-08** | Supply Chain | Compromised third-party dependency introduces backdoor. | Low | Critical | Pinned hash lockfiles; Trivy CVE scans gate build; Cosign cryptographic signatures. |

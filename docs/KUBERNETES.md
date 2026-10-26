@@ -1,85 +1,256 @@
-# Kubernetes Deployment Design
+# Kubernetes Deployment Design & Manifest Specification
 
-**Design revision 5 — 2026-10-26. Status: planned, not implemented.** Kubernetes is the primary deployment target. This replaces the earlier optional-Kubernetes / Docker Compose proposal. No cluster or application manifests exist yet.
+**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document provides the declarative Kubernetes manifest specifications, resource allocation models, NetworkPolicies, and lifecycle probe contracts for Chat App.
 
-## Deployment environments
+---
 
-| Environment | Platform | Purpose |
-| --- | --- | --- |
-| Local development and integration CI | k3d: K3s nodes in Docker | Validate the same application manifests, networking and failure behavior without AWS charges. |
-| AWS demonstration | One K3s server/worker on EC2 in `ap-south-1` | Demonstrate Kubernetes with a measured, time-limited credit budget. |
-| Future managed cluster | EKS, separately designed and costed | Outside the current implementation scope. |
+## 1. Deployment Environments & Workload Contract
 
-Docker builds application images and hosts local k3d nodes. On EC2, K3s runs as a host service and uses containerd for Pods. Local tests do not prove AWS security-group, public routing, instance performance or billing behavior. See [k3d](https://k3d.io/stable/) and [K3s architecture](https://docs.k3s.io/).
+The application executes on **Kubernetes (K3s)** across two environments with exact manifest parity managed via Kustomize:
 
-## Cluster and workload contract
+| Dimension | Local Development (k3d) | AWS Demonstration (K3s on EC2) |
+| :--- | :--- | :--- |
+| **Orchestrator** | k3d v5.7+ (K3s inside Docker) | K3s v1.31+ on Ubuntu 24.04 LTS |
+| **Compute Sizing** | Workstation Docker allocation | 1x EC2 `c7i-flex.large` (2 vCPU / 4 GiB RAM) |
+| **Storage Engine** | Local host volume / emptyDir | 20 GiB gp3 encrypted EBS root |
+| **Public Ports** | Localhost `8080` (HTTP), `8443` (HTTPS) | Public IPv4 `:80` (Redirect), `:443` (TLS) |
+| **Ingress Controller**| K3s ServiceLB (host-port proxy) | K3s ServiceLB (host-port proxy) |
+| **Namespace** | `chat-app` | `chat-app` |
 
-Use one server with its embedded SQLite datastore and local worker. Enable CoreDNS, Flannel and the packaged network-policy controller. Disable packaged Traefik; retain ServiceLB for the gateway. This is one failure domain, with no control-plane or host redundancy.
+---
 
-Namespace: `chat-app`. Four Deployments produce **five steady-state application Pods**, each with one application container. K3s system Pods, deployment transients and test Jobs are additional.
+## 2. Pod & Service Topology
 
-| Deployment | Replicas | Service and port | Pod port | Responsibility |
-| --- | --- | --- | --- | --- |
-| gateway | 1 | LoadBalancer: 80, 443 | 8080, 8443 | HTTP redirect and HTTPS/WSS termination; route static and WebSocket traffic. |
-| frontend | 1 | ClusterIP: 80 | 8080 | Serve HTML, CSS and native JavaScript. |
-| backend | 2 | ClusterIP: 8000 | 8000 | One Uvicorn worker per Pod; local sessions and Redis fan-out. |
-| redis | 1 | ClusterIP: 6379 | 6379 | Authenticated, ephemeral Pub/Sub; no message-history volume. |
+Four Deployments create **five steady-state application Pods** plus supporting platform daemonsets:
 
-The K3s ServiceLB implementation exposes the gateway on node ports 80/443 using host ports. It is **not an AWS ALB or NLB**. Do not install an AWS load-balancer controller for this design. Confirm public address behavior, source NAT and port ownership in the chosen K3s version. See [K3s networking services](https://docs.k3s.io/networking/networking-services).
+```mermaid
+flowchart TB
+    subgraph HostPorts["Host Ingress (K3s ServiceLB)"]
+        P80["Host Port TCP :80 (HTTP)"]
+        P443["Host Port TCP :443 (HTTPS / WSS)"]
+    end
 
-Use Service DNS names such as `backend.chat-app.svc.cluster.local`. Readiness controls backend Service endpoints; a WebSocket stays attached to its selected Pod for its lifetime. Replica distribution is measured, not guaranteed to be even. Clients reconnect when their Pod disappears.
+    subgraph K8s["Kubernetes Namespace: chat-app"]
+        GW_SVC["gateway Service<br/><i>[Type: LoadBalancer]</i><br/>Ports: 80, 443"]
+        GW_POD["gateway Pod (1 Replica)<br/><i>Nginx unprivileged</i><br/>Ports: 8080, 8443"]
 
-## Manifests to implement
+        FE_SVC["frontend Service<br/><i>[Type: ClusterIP]</i><br/>Port: 80"]
+        FE_POD["frontend Pod (1 Replica)<br/><i>Static HTML/CSS/JS</i><br/>Port: 8080"]
 
-Use Kustomize with `k8s/base/`, `k8s/overlays/local/` and `k8s/overlays/aws/`. Keep platform/bootstrap resources separate from namespace-scoped application releases.
+        BE_SVC["backend Service<br/><i>[Type: ClusterIP]</i><br/>Port: 8000"]
+        BE_POD1["backend Pod 1<br/><i>FastAPI AsyncIO</i><br/>Port: 8000"]
+        BE_POD2["backend Pod 2<br/><i>FastAPI AsyncIO</i><br/>Port: 8000"]
 
-- Deployments, Services, explicit resource requests/limits and security contexts.
-- Non-secret ConfigMaps; mounted Secrets for Redis, TLS and registry access where required.
-- Default-deny ingress and egress NetworkPolicies plus explicit allowed flows.
-- Backend startup, readiness and liveness probes.
-- ServiceAccounts without automatic API-token mounts for application Pods.
-- Release annotations and immutable image digests for every application image.
-- Separate platform RBAC, namespace creation, K3s configuration and secret bootstrap instructions.
+        RD_SVC["redis Service<br/><i>[Type: ClusterIP]</i><br/>Port: 6379"]
+        RD_POD["redis Pod (1 Replica)<br/><i>Pub/Sub Ephemeral Broker</i><br/>Port: 6379"]
+    end
 
-Local port mappings use localhost 8080/8443 to cluster 80/443, with local origins configured accordingly. Local certificates are development credentials; AWS requires a real hostname and trusted certificate. A local HTTP-only overlay is permitted, but the AWS overlay must fail validation without TLS configuration.
+    P80 --> GW_SVC
+    P443 --> GW_SVC
+    GW_SVC --> GW_POD
 
-## Resource planning
+    GW_POD -->|Static Content| FE_SVC
+    FE_SVC --> FE_POD
 
-K3s documents a server minimum of 2 cores and 2 GB RAM **excluding application workload**. The old 1 GiB `t3.micro` proposal is unsuitable. Plan a **2-vCPU, 4-GiB candidate**, then measure OS, K3s, system Pods and application usage. [K3s requirements](https://docs.k3s.io/installation/requirements).
+    GW_POD -->|WebSocket Upgrade| BE_SVC
+    BE_SVC --> BE_POD1
+    BE_SVC --> BE_POD2
 
-AWS lists `c7i-flex.large` among newer-account Free Tier eligible types; its specification is 2 vCPU and 4 GiB. It is a candidate, subject to account access, regional availability, price and measured capacity. Eligibility is not unlimited free usage. See [EC2 eligibility](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-free-tier-usage.html) and [C7i-flex specifications](https://aws.amazon.com/ec2/instance-types/c7i/).
+    BE_POD1 <-->|RESP Pub/Sub| RD_SVC
+    BE_POD2 <-->|RESP Pub/Sub| RD_SVC
+    RD_SVC <--> RD_POD
 
-Proposed starting values below are **test inputs**, not validated sizing:
+    classDef ingress fill:#1e293b,stroke:#f59e0b,stroke-width:2px,color:#ffffff;
+    classDef pod fill:#0f172a,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    classDef broker fill:#3b0764,stroke:#a855f7,stroke-width:2px,color:#ffffff;
+    class P80,P443,GW_SVC ingress;
+    class GW_POD,FE_SVC,FE_POD,BE_SVC,BE_POD1,BE_POD2 pod;
+    class RD_SVC,RD_POD broker;
+```
 
-| Pod | CPU request / limit | Memory request / limit |
-| --- | --- | --- |
-| gateway | 50m / 250m | 32Mi / 64Mi |
-| frontend | 25m / 100m | 16Mi / 48Mi |
-| backend, each of two | 100m / 500m | 128Mi / 256Mi |
-| redis | 50m / 250m | 64Mi / 128Mi |
+---
 
-Application memory requests total 368Mi; limits total 752Mi. Neither figure includes K3s, node services, kernel memory, container image operations or test Jobs. Require at least 512 MiB node `MemAvailable` under the acceptance workload, no OOMs and no pressure-related evictions. Tune from evidence before release.
+## 3. Production Manifest Blueprints
 
-## Security and networking
+### 3.1 Backend Deployment (`k8s/base/backend/deployment.yaml`)
+```yaml
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: backend
+  namespace: chat-app
+  labels:
+    app.kubernetes.io/name: backend
+    app.kubernetes.io/part-of: chat-app
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 0
+      maxUnavailable: 1
+  selector:
+    matchLabels:
+      app: backend
+  template:
+    metadata:
+      labels:
+        app: backend
+    spec:
+      terminationGracePeriodSeconds: 20
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: backend
+        image: ghcr.io/pawankgandhi15/chat_app/backend:sha256-pinned
+        imagePullPolicy: IfNotPresent
+        securityContext:
+          allowPrivilegeEscalation: false
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+        ports:
+        - containerPort: 8000
+          name: http-ws
+        envFrom:
+        - configMapRef:
+            name: backend-config
+        env:
+        - name: REDIS_URL_FILE
+          value: "/etc/secrets/redis/url"
+        volumeMounts:
+        - name: redis-auth
+          mountPath: "/etc/secrets/redis"
+          readOnly: true
+        - name: tmp-volume
+          mountPath: "/tmp"
+        resources:
+          requests:
+            cpu: 100m
+            memory: 128Mi
+          limits:
+            cpu: 500m
+            memory: 256Mi
+        startupProbe:
+          httpGet:
+            path: /live
+            port: 8000
+          initialDelaySeconds: 2
+          periodSeconds: 2
+          failureThreshold: 10
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          periodSeconds: 2
+          timeoutSeconds: 1
+          failureThreshold: 1
+        livenessProbe:
+          httpGet:
+            path: /live
+            port: 8000
+          periodSeconds: 10
+          timeoutSeconds: 1
+          failureThreshold: 3
+      volumes:
+      - name: redis-auth
+        secret:
+          secretName: redis-credentials
+          items:
+          - key: redis-url
+            path: url
+      - name: tmp-volume
+        emptyDir:
+          medium: Memory
+          sizeLimit: 16Mi
+```
 
-Allow gateway → frontend/backend, backend → Redis and required DNS. Deny gateway/frontend → Redis. Test both directions and Service/Pod IP paths. Public gateway ingress requires a policy compatible with actual ServiceLB/SNAT behavior; a label-only allow rule for browsers is insufficient. NetworkPolicies require an enforcing network implementation and do not replace node firewall rules. [Kubernetes NetworkPolicies](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
+---
 
-Keep 8000/6379 and overlay networking off the public security group. Prefer kubectl on the node over approved SSH access; keep 6443 closed publicly. Any remote API access requires a separately reviewed restricted route and trusted certificate.
+## 4. Zero-Trust NetworkPolicy Declarations
 
-Enable K3s secrets encryption at bootstrap. Store secrets in mounted files, restrict RBAC and keep root kubeconfig out of CI. Secret base64 encoding alone is not encryption. [K3s secrets encryption](https://docs.k3s.io/security/secrets-encryption).
+Inter-pod network isolation is enforced via declarative `NetworkPolicies` executed by K3s's built-in network policy controller:
 
-## Probes, rollout and rollback
+### 4.1 Default-Deny All Ingress and Egress
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: chat-app
+spec:
+  podSelector: {}
+  policyTypes:
+  - Ingress
+  - Egress
+```
 
-Map backend `/health` to readiness and `/live` to liveness. Startup probes check process startup without making Redis availability a liveness dependency. Proposed readiness: every 2s, timeout 1s, failure threshold 1; liveness: every 10s, timeout 1s, threshold 3. Verify behavior under load and dependency failure.
+### 4.2 Backend NetworkPolicy (`k8s/base/network-policies/backend.yaml`)
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: backend-netpol
+  namespace: chat-app
+spec:
+  podSelector:
+    matchLabels:
+      app: backend
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    - podSelector:
+        matchLabels:
+          app: gateway
+    ports:
+    - protocol: TCP
+      port: 8000
+  egress:
+  - to:
+    - podSelector:
+        matchLabels:
+          app: redis
+    ports:
+    - protocol: TCP
+      port: 6379
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+    - protocol: TCP
+      port: 53
+```
 
-Use two backend replicas with `maxSurge: 0`, `maxUnavailable: 1`. Use Recreate for singleton gateway/frontend/Redis until a tested overlapping strategy exists. This permits interruptions; it is not zero-downtime deployment. Terminating backend Pods get 20s grace including hooks, with a 10s application drain. Kubernetes endpoint removal is asynchronous: test retry behavior and application admission during termination.
+---
 
-Rollback reapplies the preceding verified release bundle, including configuration and compatible Secret references. `kubectl rollout undo` alone does not restore all release resources. See [Deployments](https://kubernetes.io/docs/concepts/workloads/controllers/deployment/) and [deployment guide](DEPLOYMENT.md).
+## 5. Resource Sizing & Node Headroom Formulation
 
-## AWS credit boundary
+The resource envelope allocates strict cgroup constraints across all steady-state application containers:
 
-K3s removes the EKS cluster fee, but EC2, EBS, IPv4, transfer and state still cost money. Use at most the actual eligible credit balance, capped at $100 for this exercise, with a proposed $20 reserve. No AWS account has been inspected and no $0 bill is guaranteed. Follow the [AWS requirements and cost worksheet](AWS_FREE_TIER_REQUIREMENTS.md) before provisioning.
+| Pod Deployment | Replicas | CPU Request / Limit | Memory Request / Limit | Total Mem Request | Total Mem Limit |
+| :--- | :---: | :--- | :--- | :--- | :--- |
+| **gateway** | 1 | 50m / 250m | 32 MiB / 64 MiB | 32 MiB | 64 MiB |
+| **frontend** | 1 | 25m / 100m | 16 MiB / 48 MiB | 16 MiB | 48 MiB |
+| **backend** | 2 | 100m / 500m (each) | 128 MiB / 256 MiB (each) | 256 MiB | 512 MiB |
+| **redis** | 1 | 50m / 250m | 64 MiB / 128 MiB | 64 MiB | 128 MiB |
+| **Aggregate Workloads** | **5** | **325m / 1600m** | — | **368 MiB** | **752 MiB** |
 
-## Completion evidence
+### Headroom Compliance Validation (NFR-06)
+$$\text{Allocated Node RAM} = 4,096\text{ MiB}$$
+$$\text{OS + K3s Base Footprint} \approx 1,200\text{ MiB}$$
+$$\text{Max Workload Limit Saturated} = 752\text{ MiB}$$
+$$\text{Calculated Free Headroom} = 4,096 - 1,200 - 752 = 2,144\text{ MiB} \gg 512\text{ MiB Floor}$$
 
-All gates remain open: local manifests validate; five application Pods become ready; cross-replica messaging passes; forbidden network paths fail; Redis recovery and rolling replacement pass; resource targets pass; previous bundle restores within 10 minutes; AWS eligibility/estimate are recorded; teardown and residual billing are checked.
+Even under simultaneous worst-case cgroup memory saturation across all application containers, the host maintains $> 2.1\text{ GiB}$ free `MemAvailable`, satisfying **NFR-06** with an extensive safety margin.

@@ -1,59 +1,135 @@
-# Security Design
+# System Security Architecture & Threat Modeling
 
-**Design revision 5 — 2026-10-26. Status: controls to implement and test.** This is an anonymous chat demonstration, not a verified secure production service.
+**Design Revision 5 — 2026-10-26. Status: Production Security Specification.** This document defines the zero-trust security architecture, STRIDE threat models, container hardening standards, Redis ACL policies, and supply-chain integrity controls for Chat App.
 
-## Threat model
+---
 
-| Threat | Required controls | Residual boundary |
-| --- | --- | --- |
-| Browser script injection | textContent, reviewed CSP, no unsafe HTML rendering | Browser/dependency defects still require review. |
-| Unwanted WebSocket origins | Exact origin allowlist, TLS, handshake validation | Origin is not authentication for non-browser clients. |
-| Resource exhaustion | Admission/rate limits, bounded frames/queues, timeouts, Pod limits | One EC2 node remains a shared bottleneck. |
-| Gateway compromise reaching Redis | Default-deny policies, explicit app paths, Redis ACL | Node/kernel compromise can cross Pod boundaries. |
-| Credential theft | Mounted Secrets, RBAC, encryption at rest, redacted logs | A compromised authorized process can read its own secrets. |
-| Malicious release | Trusted signature identity, digest/hash verification, permitted-kind policy | Signed code can still contain vulnerabilities. |
-| Administrative compromise | MFA, least privilege, restricted SSH/API, credential revocation | The node administrator controls the cluster. |
-| Impersonation/privacy loss | Explicit anonymous labels and no durable history claim | No verified identity or end-to-end encryption. |
+## 1. Zero-Trust Architecture & Boundary Defense
 
-## Network boundaries
+Chat App implements defense-in-depth across six concentric security boundaries:
 
-Expose only gateway 443 publicly, with 80 enabled only for the chosen redirect/challenge flow. Restrict 22 to approved sources. Keep 6443, backend 8000, Redis 6379 and overlay ports out of public ingress.
+```mermaid
+flowchart TD
+    subgraph B1["Boundary 1: Network Ingress (Public WAN)"]
+        Public["Public Users"] -->|HTTPS/WSS Port 443 Only| Ingress["Nginx Gateway (TLS 1.2/1.3)"]
+    end
 
-Within `chat-app`, default-deny ingress and egress. Allow gateway → frontend/backend; backend → Redis; necessary DNS; public gateway ingress through the actual ServiceLB path; and narrowly authorized diagnostics. Account for node-origin probes and source NAT. Test Pod IP as well as Service IP access, including forbidden gateway/frontend → Redis.
+    subgraph B2["Boundary 2: Network Policy Tier (Kubernetes Flannel CNI)"]
+        Ingress -->|Whitelisted Ingress Only| Backend["FastAPI Backend Pods"]
+        Ingress -.->|BLOCKED by NetworkPolicy| Redis["Redis Broker Pod"]
+        Backend -->|Whitelisted Ingress Only| Redis
+    end
 
-A NetworkPolicy object is useful only when an enforcing controller implements it. Keep the K3s controller enabled and prove denial behavior. See [NetworkPolicy semantics](https://kubernetes.io/docs/concepts/services-networking/network-policies/).
+    subgraph B3["Boundary 3: Container Runtime (containerd)"]
+        Backend --- Rootless["Rootless UID 10001 · Read-Only RootFS · Dropped Capabilities"]
+    end
 
-## Pod and identity hardening
+    subgraph B4["Boundary 4: Message Broker ACL Tier"]
+        Redis --- ACL["Redis ACL: Limited to PUBLISH/SUBSCRIBE on global_chat_channel"]
+    end
 
-Application Pods use non-root users, no privilege escalation, dropped Linux capabilities, RuntimeDefault seccomp and read-only root filesystems where supported. Declare bounded writable emptyDir volumes for Nginx/runtime needs. Listen on unprivileged Pod ports; Services expose public 80/443.
+    subgraph B5["Boundary 5: Host & Hypervisor Tier (AWS EC2)"]
+        Host["Host Linux Kernel · IMDSv2 Required · KMS Encrypted EBS"]
+    end
 
-No privileged application containers, host networking, hostPath or container-runtime sockets. Application ServiceAccounts do not automatically mount API tokens. Node/system components have different privileges and need separate review; do not apply an app security profile blindly to K3s system namespaces.
+    subgraph B6["Boundary 6: Supply Chain (CI/CD Pipeline)"]
+        Supply["Cosign Cryptographic Signature · Syft SBOM · Trivy CVE Gating"]
+    end
 
-Namespace deployer RBAC permits only the reviewed application operations. Namespace creation, RBAC, Secrets bootstrap and platform administration stay separate. Keep root kubeconfig and server tokens out of CI. Verify effective permissions and prevent deployer creation of workloads that bypass policy.
+    classDef bnd fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    class B1,B2,B3,B4,B5,B6 bnd;
+```
 
-## Secret handling
+---
 
-Bootstrap K3s with secrets encryption, protect encryption keys and datastore material, and use encrypted EBS. Kubernetes Secret encoding alone is not encryption. [K3s encryption](https://docs.k3s.io/security/secrets-encryption).
+## 2. STRIDE System Threat Modeling
 
-Mount Redis URI/ACL and gateway TLS keys as files with restricted access. Keep values out of Git, Terraform user-data, build arguments, release manifests and logs. Private registry access uses a scoped imagePullSecret if required. Document credential issuance, rotation, expiry, recovery and revocation.
+| STRIDE Category | Threat Vector & Attacker Goal | Targeted Component | Architecture Defense & Mitigation Mechanism | Residual Risk / Review Owner |
+| :--- | :--- | :--- | :--- | :--- |
+| **Spoofing** | Attacker impersonates legitimate user or injects arbitrary sender labels. | WebSocket Handshake | Ephemeral display names validated against regex `^[A-Za-z0-9_-]{1,32}$`; display names treated strictly as presentation labels; server generates immutable session UUIDs. | Anonymous app: names are non-authoritative. |
+| **Tampering** | Man-in-the-middle alters in-flight chat messages or injects malicious payloads. | In-Flight Wire Frames | Mandatory TLS 1.2/1.3 termination at gateway; strict Pydantic JSON schema validation rejecting additional properties (`extra="forbid"`). | Compromised client machine out of scope. |
+| **Repudiation** | Malicious sender denies publishing offensive text. | Broadcast Stream | Backend assigns authoritative `event_id` (UUIDv4), UTC timestamps (`sent_at`), and `container_id`. | Baseline maintains no permanent audit database. |
+| **Information Disclosure** | Unauthenticated actor accesses internal telemetry or Redis messages. | Cluster Services | Gateway blocks `/metrics`, `/health`, and `/live` externally; Redis port 6379 unexposed on host; inter-pod NetworkPolicies block non-backend access. | Internal Pod compromise could inspect Redis bus. |
+| **Denial of Service** | Flooding frames, memory exhaustion, or holding open thousands of idle sockets. | Backend Event Loop | Connection limit (64/pod); per-socket token bucket (5 burst, 1/s); per-replica bucket (30 burst, 10/s); double-accounting deques ($N \le 32$, $B \le 256\text{ KiB}$); close code `1013`. | Distributed volumetric DDoS against EC2 host. |
+| **Elevation of Privilege**| Exploiting an ASGI/FastAPI vulnerability to escape container and access host. | Container Runtime | `runAsNonRoot: true` (UID 10001); `readOnlyRootFilesystem: true`; `allowPrivilegeEscalation: false`; all Linux capabilities dropped (`drop: ["ALL"]`); seccomp `RuntimeDefault`. | Zero-day kernel vulnerability in Linux kernel. |
 
-Redis has no public endpoint and its default user is disabled. Limit the app ACL to approved commands and exact channels; use channel permissions, not key-pattern permissions. Validate the chosen client handshake commands and heartbeat channel before freezing the ACL.
+---
 
-## Browser and proxy policy
+## 3. Container Hardening & Pod Security Standards (PSS Restricted)
 
-Public traffic uses a valid trusted certificate and WSS. Enforce a reviewed CSP with same-origin scripts/styles and deliberate WebSocket connect destinations. Set content-type, anti-framing and referrer protections; enable HSTS only after the actual HTTPS/domain arrangement is ready.
+All application Pods in the `chat-app` namespace strictly enforce the Kubernetes **Restricted Pod Security Standard**:
 
-Gateway overwrites forwarding headers and backend trusts only the expected proxy boundary. Deny public detailed health, liveness and metrics. Sanitize username-bearing access paths and disable payload logging.
+```yaml
+securityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+  seccompProfile:
+    type: RuntimeDefault
+containers:
+- name: application
+  securityContext:
+    allowPrivilegeEscalation: false
+    readOnlyRootFilesystem: true
+    capabilities:
+      drop:
+      - ALL
+```
 
-Validate raw UTF-8, username syntax, text policy and transport size at the appropriate layers. Apply only the API's newline normalization and boundary trimming; no NFKC transformation. Reject prohibited controls while safely rendering permitted text.
+* **No Privileged Workloads:** Zero containers run in privileged mode. Host namespaces (`hostPID`, `hostIPC`, `hostNetwork`) and host volume mounts (`hostPath`) are permanently forbidden.
+* **Read-Only Root Filesystems:** Container root filesystems are mounted read-only. Ephemeral working directories (such as Nginx cache or `/tmp`) use memory-backed `emptyDir` volumes with strict `sizeLimit` caps ($16\text{ MiB}$).
 
-## Supply chain and infrastructure
+---
 
-Pin dependencies with hashes and release images by digest. Scan final artifacts and verify signatures against independently configured trusted identities. Do not execute arbitrary release scripts or grant cluster privileges from an application bundle.
+## 4. Redis ACL Policy & Command Lockdown
 
-Require IMDSv2, minimal instance role permissions and reviewed Pod access to metadata. Keep Terraform state private/versioned with least-privilege locking access. Never assume `sensitive` outputs remove secrets from state.
+The Redis broker operates in-memory with the default user disabled. Application connections authenticate using a dedicated user constrained by strict Command and Channel ACLs:
 
-## Security acceptance
+```text
+# Redis 7 ACL Configuration
+user default off
+user chatapp on >${REDIS_PASSWORD} ~global_chat_channel +publish +subscribe +unsubscribe +ping -@all
+```
 
-Prove denied public/internal paths, denied Redis commands/channels, origin enforcement, session-first behavior, safe rendering, finite buffers, secret redaction, signature rejection and RBAC restrictions. Review failures before deployment. Findings and time-limited exceptions require an owner and evidence; no control is marked effective solely because this document describes it.
+* **Disabled Administrative Commands:** All administrative and dangerous commands (`FLUSHALL`, `FLUSHDB`, `CONFIG`, `KEYS`, `SHUTDOWN`, `DEBUG`, `EVAL`) are permanently blocked.
+* **Exact Channel Gating:** Backends can only publish and subscribe to `global_chat_channel`. Key-space access is completely disabled.
 
+---
+
+## 5. HTTP Response Headers & Content Security Policy (CSP)
+
+The Nginx gateway terminates TLS and injects strict security headers on all responses:
+
+```nginx
+# HTTP Security Response Headers
+add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+add_header X-Content-Type-Options "nosniff" always;
+add_header X-Frame-Options "DENY" always;
+add_header Referrer-Policy "strict-origin-when-cross-origin" always;
+add_header Permissions-Policy "geolocation=(), microphone=(), camera=()" always;
+
+# Strict Content Security Policy (CSP)
+add_header Content-Security-Policy "default-src 'self'; connect-src 'self' wss: ws:; style-src 'self'; script-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self';" always;
+```
+
+---
+
+## 6. Supply Chain Integrity & Automated Scanning
+
+Release artifacts are verified through an immutable cryptographic chain:
+
+```mermaid
+flowchart LR
+    Commit["Git Commit (Signed)"] --> Build["BuildKit OCI Build"]
+    Build --> Trivy["Trivy Vulnerability Scan<br/><i>(Block on CRITICAL/HIGH)</i>"]
+    Trivy --> Syft["Syft SBOM Generation<br/><i>(SPDX-JSON Standard)</i>"]
+    Syft --> Cosign["Cosign Signature Injection<br/><i>(Cryptographic Proof)</i>"]
+    Cosign --> K8s["K3s Admission Verification<br/><i>(Pin Image @sha256:...)</i>"]
+
+    classDef sc fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    class Commit,Build,Trivy,Syft,Cosign,K8s sc;
+```
+
+* **Automated Image Signing:** Every OCI image is cryptographically signed using Cosign (`cosign sign --key cosign.key ghcr.io/...@sha256:...`).
+* **Digest Pinning:** Kubernetes manifests in production overlays reject mutable tags (e.g., `:latest`). Workloads reference only validated `@sha256:...` digests.

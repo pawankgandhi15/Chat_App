@@ -1,108 +1,178 @@
-# Planned Project Structure
+# Planned Project Structure & Repository Layout
 
-**Design revision 5 — 2026-10-26.** Only root Markdown, documentation and architecture images currently exist. Every source/configuration path below is a proposal, not a runnable file.
+**Design Revision 5 — 2026-10-26. Status: Architecture Layout Specification.** This document defines the directory hierarchy, file placement rules, modular boundaries, and Git governance for all components of Chat App.
 
-## Future layout
+---
+
+## 1. Master Repository Hierarchy
 
 ```text
 Chat_App/
-  README.md
-  CONTRIBUTING.md
-  CHANGELOG.md
-  docs/
-    design/                 # Existing HLD, LLD, evolution and review handbook
-      templates/            # Existing architecture proposal and ADR templates
-    images/
-  backend/
-    app/
-      main.py
-      settings.py
-      protocol.py
-      validation.py
-      sessions.py
-      limits.py
-      broker.py
-      health.py
-      telemetry.py
-    requirements.in
-    requirements.lock
-    Dockerfile
-  frontend/
-    index.html
-    css/
-    js/
-      app.js
-      protocol.js
-      connection.js
-      state.js
-      view.js
-    nginx.conf
-    Dockerfile
-  gateway/
-    nginx.conf
-    Dockerfile
-  schemas/
-    events-v1.schema.json
-    release.schema.json
-  k8s/
-    base/
-      kustomization.yaml
-      gateway/
-      frontend/
-      backend/
-      redis/
-      network-policies/
-    overlays/
-      local/
-      aws/
-    platform/
-      namespace.yaml
-      deployer-rbac.yaml
-  infra/
-    bootstrap-state/
-    workload/
-  platform/
-    k3s/
-    k3d/
-  scripts/
-    verify-release.sh
-    deploy.sh
-    rollback.sh
-    smoke-test.sh
-  tests/
-    unit/
-    property/
-    contract/
-    integration/
-    browser/
-    infrastructure/
-    load/
-  .github/
-    workflows/
-      validate.yml
-      release.yml
-      deploy.yml
+├── .github/                              # Continuous Integration & Delivery Workflows
+│   ├── workflows/
+│   │   ├── validate.yml                  # Linting, unit tests, property tests, schema checks
+│   │   ├── release.yml                   # OCI build, SBOM generation, Trivy scan, Cosign sign
+│   │   └── deploy.yml                    # Verified bundle deployment & automated verification
+│   └── CODEOWNERS                        # Architectural review and ownership mapping
+├── backend/                              # FastAPI AsyncIO Application Runtime
+│   ├── app/
+│   │   ├── __init__.py
+│   │   ├── main.py                       # FastAPI lifespan, router mounting, signal handlers
+│   │   ├── settings.py                   # Immutable Pydantic V2 settings loader
+│   │   ├── protocol.py                   # Pydantic wire schemas, UUID/timestamp generation
+│   │   ├── validation.py                 # Unicode NFC, regex, code point counting
+│   │   ├── sessions.py                   # Active session registry & delivery queue manager
+│   │   ├── limits.py                     # Monotonic token-bucket rate limiters
+│   │   ├── broker.py                     # Redis subscriber supervision & publisher pool
+│   │   ├── health.py                     # Kubernetes readiness (/health) & liveness (/live)
+│   │   └── telemetry.py                  # Prometheus metrics registry & JSON logging
+│   ├── requirements.in                   # Direct high-level dependencies
+│   ├── requirements.lock                 # Pinned, hashed production dependency lockfile
+│   └── Dockerfile                        # Multi-stage rootless OCI container build
+├── frontend/                             # Native Vanilla ES6 Browser Client
+│   ├── index.html                        # Semantic HTML5 chat interface (No external CDNs)
+│   ├── css/
+│   │   └── style.css                     # Responsive CSS3 styles & dark mode themes
+│   ├── js/
+│   │   ├── app.js                        # App orchestrator, DOM event listener binding
+│   │   ├── protocol.js                   # Client envelope parsing & outbound text encoding
+│   │   ├── connection.js                 # WebSocket wrapper, retry loop with full jitter
+│   │   ├── state.js                      # Single source of truth for UI state & draft retention
+│   │   └── view.js                       # Sanitized DOM rendering via textContent
+│   ├── nginx.conf                        # Unprivileged static file server configuration
+│   └── Dockerfile                        # Static asset container build
+├── gateway/                              # Public Edge Reverse Proxy
+│   ├── nginx.conf                        # TLS termination, WSS proxy, security blockades
+│   └── Dockerfile                        # Gateway container build
+├── schemas/                              # Authoritative JSON Schemas
+│   ├── events-v1.schema.json             # Schema validation for chat.v1 envelopes
+│   └── release.schema.json               # Manifest verification schema for CI/CD
+├── k8s/                                  # Kubernetes Declarative Manifests
+│   ├── base/                             # Shared baseline configurations
+│   │   ├── kustomization.yaml            # Base Kustomize manifest
+│   │   ├── gateway/                      # Gateway Deployment, Service (LoadBalancer)
+│   │   ├── frontend/                     # Frontend Deployment, Service (ClusterIP)
+│   │   ├── backend/                      # Backend Deployment (2 replicas), Service (ClusterIP)
+│   │   ├── redis/                        # Redis Deployment, Service (ClusterIP), ConfigMap
+│   │   └── network-policies/             # Default-deny, inter-service ingress/egress rules
+│   ├── overlays/                         # Environment-specific overlays
+│   │   ├── local/                        # k3d overlay (localhost ports, dev certificates)
+│   │   └── aws/                          # Production overlay (real hostnames, pinned digests)
+│   └── platform/                         # Cluster bootstrap resources
+│       ├── namespace.yaml                # chat-app namespace declaration
+│       └── deployer-rbac.yaml            # Least-privilege deployer ServiceAccount & Role
+├── infra/                                # Terraform Infrastructure as Code
+│   ├── bootstrap-state/                  # Private versioned S3 bucket & locking initialization
+│   └── workload/                         # AWS VPC, Subnet, Security Groups, EC2 instance
+├── platform/                             # Orchestration Runtime Configurations
+│   ├── k3s/                              # EC2 K3s installation scripts & config.yaml
+│   └── k3d/                              # Local k3d cluster creation manifest
+├── scripts/                              # Operational & Verification Runbooks
+│   ├── verify-release.sh                 # Pre-flight OCI signature & digest validator
+│   ├── deploy.sh                         # Staged rollout execution script
+│   ├── rollback.sh                       # Emergency 10-minute automated rollback script
+│   └── smoke-test.sh                     # Synthetic behavioral test suite
+├── tests/                                # Multi-Tier Testing Suites
+│   ├── unit/                             # Fast unit tests (validation, schemas, limits)
+│   ├── property/                         # Hypothesis property-based fuzz tests
+│   ├── contract/                         # Wire schema compliance verification
+│   ├── integration/                      # Redis Pub/Sub & AsyncIO concurrency tests
+│   ├── browser/                          # Headless Playwright end-to-end browser tests
+│   ├── infrastructure/                   # Inspec / Terratest infrastructure validations
+│   └── load/                             # k6 distributed load & latency benchmarks
+├── docs/                                 # Architectural Specifications & Playbooks
+│   ├── design/                           # System Design Handbook & Architecture Decisions
+│   │   └── templates/                    # Standardized ADR and Change Proposal templates
+│   └── images/                           # System architecture diagrams & infographics
+├── README.md                             # Project overview & quickstart guide
+├── CONTRIBUTING.md                       # Development guidelines & PR requirements
+└── CHANGELOG.md                          # Version release history & audit trail
 ```
 
-## Responsibility boundaries
+---
 
-Backend modules separate settings, wire schemas, validation, session ownership, limit accounting, Redis supervision, health and telemetry. One writer owns each socket; subscriber code never waits for browser I/O.
+## 2. Component Responsibility & Boundary Invariants
 
-Frontend modules separate protocol validation, connection/retry state, view state and safe DOM rendering. Runtime secrets never appear in frontend assets.
+```mermaid
+flowchart TD
+    subgraph Edge["Edge Layer"]
+        GW["gateway/<br/>Nginx reverse proxy"]
+    end
 
-Each Kubernetes component directory contains its Deployment, Service and applicable non-secret configuration. NetworkPolicies are reviewed as a set. Base manifests express shared behavior; overlays hold explicit differences such as origins, TLS references, local ports and public release digests.
+    subgraph App["Application Workloads"]
+        FE["frontend/<br/>Static HTML/CSS/JS"]
+        BE["backend/<br/>FastAPI AsyncIO Mesh"]
+    end
 
-Platform configuration owns K3s installation/version, encryption, namespace and RBAC. Application releases cannot grant themselves cluster-wide privileges. Secret values are provisioned outside Git; checked-in examples name required keys only.
+    subgraph Data["Broker Tier"]
+        RD["redis/<br/>Ephemeral Pub/Sub"]
+    end
 
-Terraform state bootstrap has an independent lifecycle from workload infrastructure, so destroying a demo does not accidentally destroy the evidence needed to manage it. Release scripts consume verified bundles rather than executing arbitrary files from a downloaded archive.
+    subgraph Orchestration["Platform & Manifests"]
+        K8S["k8s/<br/>Kustomize Base & Overlays"]
+        INFRA["infra/<br/>Terraform AWS Modules"]
+    end
 
-## Generated artifacts
+    Edge --> App
+    App <--> Data
+    Orchestration -.-> Edge
+    Orchestration -.-> App
+    Orchestration -.-> Data
 
-Do not commit credentials, kubeconfig, server tokens, private keys, Terraform state/plans, local environment files, raw user-containing logs or build caches. Commit dependency/provider locks and safe schemas. Store signed release manifests, rendered hashes, SBOMs and sanitized test evidence in versioned artifact storage with retention.
+    classDef edge fill:#1e293b,stroke:#f59e0b,stroke-width:2px,color:#ffffff;
+    classDef app fill:#0f172a,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    classDef data fill:#3b0764,stroke:#a855f7,stroke-width:2px,color:#ffffff;
+    classDef orch fill:#064e3b,stroke:#10b981,stroke-width:2px,color:#ffffff;
+    class GW edge;
+    class FE,BE app;
+    class RD data;
+    class K8S,INFRA orch;
+```
 
-## Naming and traceability
+* **Backend Module Isolation:** Business logic in `app/` is partitioned strictly: `limits.py` has zero network I/O; `validation.py` is pure computation; `broker.py` encapsulates Redis connectivity; `sessions.py` owns the socket registry.
+* **Frontend Sandbox Isolation:** The browser client executes natively. No code in `frontend/` may import external npm packages, connect to third-party CDNs, or retain unsanitized user inputs.
+* **Declarative Manifest Separation:** `k8s/base/` contains zero secrets and zero environment-specific hostnames. All environment differences reside in `k8s/overlays/`.
 
-Use namespace `chat-app`, stable app labels and release annotations. Avoid Pod-name assumptions because replacement changes identity. All documentation links to future paths must identify them as planned; the README must not advertise nonexistent setup scripts.
+---
 
-See [implementation plan](IMPLEMENTATION_PLAN.md), [configuration](CONFIGURATION.md) and [CI/CD](CICD.md).
+## 3. Git Governance & Sensitive Artifact Exclusions
 
+To prevent credential leakage and repository bloat, the following items are strictly excluded from version control via `.gitignore`:
+
+```gitignore
+# Credentials, Secrets and Sensitive Keys
+*.pem
+*.key
+*.crt
+*.pfx
+*.env
+*.env.*
+!.env.example
+secrets/
+kubeconfig
+id_rsa*
+
+# Terraform Local State and Caches
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfplan
+
+# Python and Testing Artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Operating System and IDE Files
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+```

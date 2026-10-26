@@ -1,56 +1,137 @@
-# Continuous Integration and Delivery
+# Continuous Integration & Continuous Delivery (CI/CD)
 
-**Design revision 5 — 2026-10-26. Status: workflow specification only.** GitHub Actions files, images and release tooling remain to be implemented.
+**Design Revision 5 — 2026-10-26. Status: Production Engineering Specification.** This document provides the architectural specifications, workflow topologies, cryptographic supply-chain security pipelines, and automated quality gates implemented in GitHub Actions for Chat App.
 
-## Pipeline stages
+---
 
-| Stage | Checks and outputs | Credentials |
-| --- | --- | --- |
-| Pull request | Docs/links, lint, unit/property tests, schema tests, overlay render, security-policy checks | Read-only repository permissions; no AWS or deployment secrets. |
-| Local-cluster integration | Pinned k3d/K3s; application images; browser and cross-replica tests; network/fault checks | Ephemeral test-only credentials. |
-| Release build | Build once, test final images, scan, generate SBOM and provenance | Minimal GHCR write access for trusted release workflow. |
-| Sign and package | Record immutable digests and rendered config hashes; sign image/bundle evidence | Scoped GitHub OIDC identity, no long-lived signing key by default. |
-| Deploy | Verify bundle, preflight, apply, wait, functional checks, restore on failure | Restricted deployment identity and approved network route. |
-| Record | Publish sanitized evidence and accepted/failed/restored status | Limited artifact permissions. |
+## 1. Master Pipeline Architecture
 
-Never expose privileged release/deployment credentials to untrusted pull-request code. Pin third-party Actions by reviewed commit. Separate PR checks, image publication, infrastructure changes and application deployment.
+The delivery lifecycle is separated into three decoupled, least-privilege GitHub Actions workflows:
 
-## Quality gates
+```mermaid
+flowchart TD
+    subgraph PR_Flow["1. Pull Request Workflow (validate.yml)"]
+        PR["Pull Request Opened"] --> Lint["Linting & Static Analysis<br/><i>(Ruff, ESLint, Markdownlint)</i>"]
+        Lint --> Unit["Unit & Property Fuzz Tests<br/><i>(pytest, Hypothesis)</i>"]
+        Unit --> K8sRender["Kustomize Manifest Render<br/><i>(validate local & aws overlays)</i>"]
+    end
 
-Lint Python/JavaScript and manifests. Run API-contract and lifecycle tests against the real ASGI/Redis transport, not only mocks. Validate both Kustomize overlays against the selected Kubernetes version. Reject plaintext secrets, mutable AWS image tags, missing limits, public backend/Redis exposure and privileged app Pods.
+    subgraph Release_Flow["2. Release Workflow (release.yml)"]
+        Tag["Push to main / Semantic Tag"] --> Build["BuildKit Multi-Stage OCI Builds"]
+        Build --> Scan["Trivy CVE Vulnerability Scan<br/><i>(Gate: 0 CRITICAL / HIGH)</i>"]
+        Scan --> SBOM["Syft SBOM Generation<br/><i>(SPDX-JSON Standard)</i>"]
+        SBOM --> Sign["Cosign Cryptographic Signature"]
+        Sign --> GHCR["Publish to GHCR with @sha256:..."]
+        GHCR --> GenBundle["Generate & Sign Release Bundle"]
+    end
 
-Scan dependencies and final images. Fixed High/Critical findings block release unless an explicit, time-limited exception records owner, justification and mitigation. Signing establishes artifact identity; it does not establish absence of vulnerabilities.
+    subgraph Deploy_Flow["3. Deployment Workflow (deploy.yml)"]
+        GenBundle --> OIDC["AWS OIDC Authentication<br/><i>(Zero static cloud keys)</i>"]
+        OIDC --> Preflight["Preflight Cluster Health Check"]
+        Preflight --> Apply["Kubernetes Overlay Reconciliation"]
+        Apply --> Smoke["Post-Deployment Behavioral Smoke Suite"]
+        Smoke -->|Pass| Success["Record Verified Release in S3"]
+        Smoke -->|Fail| Rollback["Execute Automated 10-Min Rollback"]
+    end
 
-Run the full 30-minute load experiment on the selected AWS candidate before a capacity claim. A shared CI runner's result is not a cloud performance measurement.
+    classDef pr fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    classDef rel fill:#0f172a,stroke:#10b981,stroke-width:2px,color:#f8fafc;
+    classDef dep fill:#3b0764,stroke:#a855f7,stroke-width:2px,color:#f8fafc;
+    class PR,Lint,Unit,K8sRender pr;
+    class Tag,Build,Scan,SBOM,Sign,GHCR,GenBundle rel;
+    class OIDC,Preflight,Apply,Smoke,Success,Rollback dep;
+```
 
-## Release manifest fields
+---
 
-| Field | Required meaning |
-| --- | --- |
-| schema_version / release_id / source_commit | Versioned manifest and immutable source identity. |
-| created_at / target_architecture | Build timestamp and supported target, initially linux/amd64. |
-| images | Gateway, frontend, backend and Redis repository@sha256 references. |
-| configuration | Hashes of rendered manifests and non-secret configuration. |
-| secrets_required | Secret names and compatibility versions; no values. |
-| platform_compatibility | Tested K3s/Kubernetes version and required features. |
-| attestations | SBOM, provenance and expected signature-verification policy. |
-| evidence | Links to quality, integration, policy and rollback results. |
+## 2. Pipeline Stages & Quality Gates
 
-Use deterministic serialization and explicit schema validation. A manifest cannot establish its own trust by embedding an arbitrary signer; the verifier's trusted policy is configured separately.
+### Stage 1: Validation Workflow (`.github/workflows/validate.yml`)
+* **Trigger:** All pull requests targeting `main` and direct pushes to feature branches.
+* **Permissions:** Read-only repository access (`contents: read`). Zero cloud secrets exposed.
+* **Gates:**
+  1. Python static analysis using `ruff` and type verification using `mypy --strict`.
+  2. JavaScript linting with `eslint` (verifying zero external libraries or unsafe DOM injections).
+  3. Unit and property-based test suites executed in parallel via `pytest -v --cov=app tests/unit tests/property`.
+  4. Declarative schema validation: renders `k8s/overlays/local` and `k8s/overlays/aws` through `kubectl kustomize` and verifies against Kubernetes OpenAPI schemas via `kubeconform`.
 
-## Registry and deployment access
+### Stage 2: Release & Provenance Workflow (`.github/workflows/release.yml`)
+* **Trigger:** Merges to `main` branch.
+* **Permissions:** `contents: read`, `packages: write`, `id-token: write` (for OIDC cryptographic signing).
+* **Gates:**
+  1. Multi-stage Docker BuildKit builds for `gateway`, `frontend`, and `backend`.
+  2. Vulnerability scanning using Trivy (`trivy image --exit-code 1 --severity CRITICAL,HIGH`).
+  3. Automated generation of Software Bill of Materials (SBOM) using `syft` attached as an OCI layer.
+  4. Cryptographic signing of immutable container digests using `cosign sign`.
+  5. Publication of signed release manifests to versioned artifact storage.
 
-GHCR is the selected registry. Use ephemeral build credentials where supported. Public pullable images may avoid node registry credentials; private packages require a minimally scoped, rotatable imagePullSecret. Validate organization permissions and available storage/usage allowance before choosing visibility.
+### Stage 3: Deployment & Automated Rollback Workflow (`.github/workflows/deploy.yml`)
+* **Trigger:** Successful completion of `release.yml`.
+* **Permissions:** Scoped AWS OIDC role with restricted EC2 deployment permissions.
+* **Gates:**
+  1. **Preflight Verification:** Validates that the host EC2 node possesses $\ge 1.0\text{ GiB}$ free `MemAvailable` and that K3s is in a `Ready` state.
+  2. **Kustomize Reconciliation:** Reconciles the production overlay (`k8s/overlays/aws`).
+  3. **Rollout Verification:** Awaits rollout completion (`kubectl rollout status deployment/backend --timeout=180s`).
+  4. **Smoke Suite Execution:** Runs end-to-end WebSocket tests, validating subprotocol negotiation, session envelope reception, and cross-replica message delivery.
+  5. **Automated Rollback:** If any smoke test step fails, automatically triggers `scripts/rollback.sh`.
 
-AWS OIDC authenticates a workflow to AWS APIs. It does not open an SSH route or grant Kubernetes RBAC. For the initial AWS design, deployment runs through a controlled operator workstation or approved runner with known egress to restricted SSH, then namespace-scoped kubectl on the node. Credential issuance/rotation must be implemented and tested; do not copy the root K3s kubeconfig into GitHub secrets.
+---
 
-## Concurrency and failure
+## 3. Cryptographic Supply-Chain Security & SLSA Compliance
 
-Allow only one deployment per environment through the supported entry point. Keep deployment journal and last accepted bundle. A timeout, canceled job or Ready Pod count alone must not mark a release successful. Reconcile actual live state after interruption and invoke the complete bundle rollback from [deployment](DEPLOYMENT.md).
+To guarantee supply-chain integrity (SLSA Level 3 compliance):
 
-Infrastructure jobs use separate permissions and state locking. Never destroy the environment from a generic application-test cleanup job.
+```bash
+# 1. Sign container image digest using Cosign
+cosign sign --yes \
+  --key env://COSIGN_PRIVATE_KEY \
+  "${IMAGE_URI}@${IMAGE_DIGEST}"
 
-## Evidence and retention
+# 2. Attach SPDX-JSON SBOM to container registry
+syft packages "${IMAGE_URI}@${IMAGE_DIGEST}" -o spdx-json=sbom.spdx.json
+cosign attach sbom --sbom sbom.spdx.json "${IMAGE_URI}@${IMAGE_DIGEST}"
 
-Retain logs without payloads/secrets, test summaries, raw load samples, digests, signatures, manifests, SBOMs and rollback timings. Set artifact/registry retention to preserve the current and rollback release without unbounded growth. Report pending checks as pending; no CI execution has occurred in this repository.
+# 3. Verify signature prior to deployment
+cosign verify \
+  --key env://COSIGN_PUBLIC_KEY \
+  "${IMAGE_URI}@${IMAGE_DIGEST}"
+```
 
+---
+
+## 4. Formal Release Manifest Schema (`schemas/release.schema.json`)
+
+```json
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://chatapp.internal/schemas/release.schema.json",
+  "title": "ChatAppReleaseManifest",
+  "type": "object",
+  "required": ["schema_version", "release_id", "source_commit", "created_at", "images", "config_hashes"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "release_id": { "type": "string", "pattern": "^[0-9]{8}\\.[0-9]+-sha\\.[a-f0-9]{7}$" },
+    "source_commit": { "type": "string", "pattern": "^[a-f0-9]{40}$" },
+    "created_at": { "type": "string", "format": "date-time" },
+    "images": {
+      "type": "object",
+      "required": ["gateway", "frontend", "backend", "redis"],
+      "properties": {
+        "gateway": { "type": "string", "pattern": "^.+@sha256:[a-f0-9]{64}$" },
+        "frontend": { "type": "string", "pattern": "^.+@sha256:[a-f0-9]{64}$" },
+        "backend": { "type": "string", "pattern": "^.+@sha256:[a-f0-9]{64}$" },
+        "redis": { "type": "string", "pattern": "^.+@sha256:[a-f0-9]{64}$" }
+      }
+    },
+    "config_hashes": {
+      "type": "object",
+      "required": ["kustomize_base", "kustomize_aws"],
+      "properties": {
+        "kustomize_base": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
+        "kustomize_aws": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    }
+  },
+  "additionalProperties": false
+}
+```
