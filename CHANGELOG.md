@@ -4,6 +4,12 @@ This file records actual repository changes. Planned application features remain
 
 ## Unreleased
 
+### Expanded architecture templates — 2026-10-26
+
+- Expanded the change proposal with evidence, scope/invariants, HLD/LLD interfaces, compatibility matrices, capacity, failure analysis, security, costs, observability, migration and recovery worksheets.
+- Expanded the ADR with decision drivers, alternatives, assumptions, residual risks, adoption/reversal, verification obligations, review outcomes and supersession history.
+- Added a template usage guide covering document selection, copying/link repair, status conventions and an explicitly unverified example; updated the design handbook index. No implementation or architecture decision was made by these template changes.
+
 ### System design handbook — 2026-10-26
 
 - Added `docs/design/` with HLD, LLD, sequence diagrams, data/protocol design, capacity calculations, staged architecture evolution, migration guidance and review traceability.

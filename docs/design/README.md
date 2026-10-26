@@ -18,8 +18,9 @@ The selected baseline remains local k3d and one AWS EC2 K3s node. Future archite
 | [Architecture evolution](ARCHITECTURE_EVOLUTION.md) | Staged HLD upgrades, HA, autoscaling and optional product extensions. |
 | [Migration playbook](MIGRATION_PLAYBOOK.md) | Compatibility, staged rollout, rollback, cutover and budget controls. |
 | [Design review checklist](DESIGN_REVIEW_CHECKLIST.md) | Review gates, acceptance mapping and unresolved decisions. |
-| [Change proposal template](templates/CHANGE_PROPOSAL.md) | Describe a proposed architecture or feature upgrade before implementation. |
-| [ADR template](templates/ADR.md) | Record a decision, alternatives, consequences and supersession. |
+| [Template guide](templates/README.md) | Choose and complete templates, manage status/evidence, and repair links after copying. |
+| [Change proposal template](templates/CHANGE_PROPOSAL.md) | Detailed HLD/LLD impact, compatibility, capacity/cost, failures, migration, rollback and verification worksheets. |
+| [ADR template](templates/ADR.md) | Decision drivers, option analysis, consequences, adoption, evidence, review and revisit conditions. |
 
 ## Which document owns a rule?
 
