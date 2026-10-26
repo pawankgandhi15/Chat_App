@@ -1,106 +1,109 @@
-# Architecture Template Guide
+# Architecture Template & Governance Guide
 
-**Template pack revision 2 · updated 2026-10-26.** These documents help turn an idea into a reviewable architecture change and preserve the reasoning after a decision.
+**Status: Production Engineering Standard. Template Pack Revision 3. Updated: 2026-10-26.**
 
-The project remains at the documentation stage. This pack adds no application implementation, cloud resources or accepted runtime decisions.
+This guide defines the engineering standards, lifecycle governance, evidence requirements, and document archetypes for proposing, recording, and reviewing architectural decisions in Chat App.
 
-## Choose the right document
+---
 
-| Document | Main question | What belongs in it |
-| --- | --- | --- |
-| [Change proposal](CHANGE_PROPOSAL.md) | What should change, and how will it be implemented and verified? | HLD/LLD, evidence, alternatives, compatibility, capacity/cost, migration and release plan. |
-| [ADR](ADR.md) | Why was this architectural option selected? | Context, drivers, decision, trade-offs, consequences, verification and revisit conditions. |
+## 1. Document Archetype Selection Matrix
 
-Use a proposal for a cross-component change, a new product contract or a migration with meaningful failure/cost consequences. Use an ADR for a durable decision that future maintainers need to understand. A proposal can produce several ADRs if it contains independent choices; each ADR should link back to the relevant proposal section.
+Engineering proposals must use the appropriate standardized template to ensure consistency, traceability, and rigorous review:
 
-Routine spelling fixes or a small documentation clarification do not need a full architecture proposal. Scale the record to the decision: keep essential reasoning and mark irrelevant sections N/A with a short reason.
+```mermaid
+flowchart TD
+    Idea["Architectural Change or Decision Proposed"] --> ScopeCheck{"Is this a permanent architectural choice<br/>or an operational implementation plan?"}
+    
+    ScopeCheck -->|Durable Technical Decision| ADR["Architecture Decision Record (ADR)<br/><i>Use templates/ADR.md</i><br/>Focus: Context, Drivers, Trade-Offs, Consequences"]
+    ScopeCheck -->|Multi-Component / Operational Plan| CP["Architecture Change Proposal (RFC)<br/><i>Use templates/CHANGE_PROPOSAL.md</i><br/>Focus: HLD/LLD impact, Capacity, Cost, Rollback, Runbooks"]
+    
+    ADR -.->|Links to| CP
+    CP -.->|May produce multiple| ADR
 
-## Workflow
+    classDef choice fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
+    class Idea,ADR,CP choice;
+```
 
-1. Read the current [design handbook](../README.md) and [decision register](../../DECISIONS_AND_RISKS.md).
-2. Copy the appropriate template into `docs/design/`; keep these master files unfilled.
-3. Assign a unique identifier, concrete title, author and baseline revision/commit.
-4. Fill observations, assumptions, scope and success criteria before selecting a solution.
-5. Compare options, complete affected design sections and record unresolved dependencies.
-6. Record actual review outcomes and link accepted decisions to implementation tasks.
-7. Append verification evidence after implementation; keep unrun checks Pending.
-8. Record cleanup, revisit conditions and supersession when the design changes.
+| Document Archetype | Template Source | When to Author | Key Deliverables & Required Work |
+| :--- | :--- | :--- | :--- |
+| **Architecture Decision Record (ADR)** | [`templates/ADR.md`](ADR.md) | Selecting a specific technology, protocol choice, state model, or invariant that future maintainers must respect. | Context, decision drivers, evaluated alternatives, trade-offs, consequences, revisit conditions. |
+| **Change Proposal (RFC)** | [`templates/CHANGE_PROPOSAL.md`](CHANGE_PROPOSAL.md) | Multi-faceted upgrades involving Kubernetes topology, schema evolution, capacity re-sizing, or multi-stage migrations. | HLD/LLD diffs, capacity models, AWS cost estimates, failure analysis, 8-gate migration runbooks. |
 
-No review status implies that AWS resources were created or that future spending was authorized. Preserve the actual task scope and resource ownership.
+---
 
-## Names and relative links
+## 2. Document Governance & Lifecycle State Machine
 
-Suggested copied filenames are `PROPOSAL-<id>-<short-slug>.md` and `ADR-<id>-<short-slug>.md` in `docs/design/`. Check the main register and existing files before allocating an ADR number; ADR-01 through ADR-21 are already used at the time of this revision.
+Architectural records transition through a formal review and delivery lifecycle:
 
-The master templates live one directory deeper than their proposed copies. Repair links as part of copying:
+```mermaid
+stateDiagram-v2
+    [*] --> DRAFT: Author creates proposal from template
+    DRAFT --> IN_REVIEW: Required sections completed & PR opened
+    IN_REVIEW --> LAST_CALL: All major comments addressed (48h window)
+    LAST_CALL --> ACCEPTED: Technical Lead & Security Sign-Off
+    LAST_CALL --> REJECTED: Unresolved correctness/security/cost blocker
+    ACCEPTED --> IMPLEMENTED: Code merged & deployed to staging
+    IMPLEMENTED --> VERIFIED: All AC/NFR tests pass with evidence
+    ACCEPTED --> SUPERSEDED: Replaced by a newer approved ADR/Proposal
+    VERIFIED --> SUPERSEDED: Future requirements necessitate redesign
+```
 
-| Destination | Link from template directory | Link from copied file in design directory |
-| --- | --- | --- |
-| Main requirements | `../../REQUIREMENTS.md` | `../REQUIREMENTS.md` |
-| HLD or LLD | `../HLD.md` / `../LLD.md` | `HLD.md` / `LLD.md` |
-| This template guide | `README.md` | `templates/README.md` |
-| Design review checklist | `../DESIGN_REVIEW_CHECKLIST.md` | `DESIGN_REVIEW_CHECKLIST.md` |
+### State Definitions & Governance Rules
+1. **`DRAFT`:** Work in progress. May contain explicit `TBD` markers. Not ready for voting.
+2. **`IN_REVIEW`:** Formally submitted via GitHub Pull Request. Requires review from at least one Backend Engineer, one Infrastructure Engineer, and the Technical Lead.
+3. **`LAST_CALL`:** All technical objections addressed. A final 48-hour commentary window before formal acceptance.
+4. **`ACCEPTED`:** The architectural direction is locked. Authorizes code implementation. *Acceptance does NOT imply that code exists or cloud funds have been spent.*
+5. **`IMPLEMENTED`:** Software and infrastructure manifests are merged and running in staging/test environments.
+6. **`VERIFIED`:** Empirical evidence (benchmark logs, test runs) attached, proving all stated acceptance criteria have passed.
+7. **`REJECTED`:** The proposal was evaluated and declined. The document is archived in Git history with recorded rationale to prevent re-proposing rejected patterns without new evidence.
+8. **`SUPERSEDED`:** A previously accepted decision has been replaced by a subsequent ADR. Maintains a bidirectional link to the superseding record.
 
-If a record is stored elsewhere, calculate links from its actual directory. Add the new record to the appropriate index/register. Do not replace the master with a filled decision.
+---
 
-## Status and evidence conventions
+## 3. Strict Evidence Quality & Classification Rubric
 
-| Label | Meaning |
-| --- | --- |
-| Fact | Observed behavior or established contract, with source/environment/date. |
-| Assumption | Unverified premise with validation, owner and consequence if false. |
-| Estimate | Modeled value with units, inputs, range and uncertainty. |
-| Target | Desired acceptance condition; not a measurement. |
-| Pending / not measured | Work or evidence does not exist yet. |
-| N/A — reason | A reviewer can see why a topic does not apply. |
+To prevent unverified assumptions from being treated as demonstrated facts, all claims in proposals and ADRs must be explicitly classified:
 
-Keep design status separate from delivery status. Proposed or In review means the choice is unresolved. Accepted selects a design. Implemented means the change exists; Verified means the stated checks passed with linked evidence. Superseded preserves the old reasoning and points to its replacement.
+| Classification | Definition & Required Documentation | Disallowed Wording |
+| :--- | :--- | :--- |
+| **[FACT]** | A mathematically proven theorem, documented language contract, or empirical benchmark with attached reproducible logs. | "FastAPI is extremely fast." |
+| **[ASSUMPTION]** | An unverified premise. Must state the owner, validation methodology, and fallback if proven false. | "AWS will never throttle our instance." |
+| **[MODEL / ESTIMATE]** | A calculated value derived from formal equations (see [Capacity Planning](../CAPACITY_PLANNING.md)). Must specify inputs, units, and uncertainty bounds. | "Memory will be around a few gigabytes." |
+| **[TARGET]** | A desired service-level objective or acceptance criterion. Not proof of capability. | "The app handles 10,000 users effortlessly." |
+| **[NOT MEASURED]** | Work or telemetry that does not yet exist. Acknowledges an empirical gap. | Leaving blank or writing "N/A" without explanation. |
 
-TBD is acceptable in a draft when the missing value is explicit. Before a decision or release milestone, resolve blocking TBDs or record their disposition, owner and constraint. Do not use empty checkboxes or a completed table as proof of execution.
+---
 
-## Scope the detail to the change
+## 4. Naming Conventions & File Placement
 
-| Change type | Sections that need particular attention |
-| --- | --- |
-| More backend replicas or revised limits | Workload model, connection skew, per-replica budgets, broker fan-out, rollout pressure and recovery. |
-| More nodes or different control plane | Failure domains, reachable ingress, network enforcement, placement, operational ownership and cost. |
-| Protocol or browser change | Strict schema, mixed versions, session ordering, close/retry behavior, drafts and accessibility. |
-| Identity, rooms or durable history | Authorization, data ownership, retention, ordering, replay, idempotency, backup and irreversible migration boundaries. |
-| Delivery or security change | Trusted artifact identity, RBAC, secrets/revocation, interrupted operations, full rollback and negative tests. |
+1. **Working Copies:** Always copy templates to `docs/design/` (never modify the master templates in `docs/design/templates/`).
+2. **Standardized File Naming:**
+   * ADRs: `docs/design/ADR-<id>-<short-slug>.md` (e.g., `ADR-22-k3s-servicelb-ingress.md`).
+   * Proposals: `docs/design/PROPOSAL-<id>-<short-slug>.md` (e.g., `PROPOSAL-04-dragonfly-broker-migration.md`).
+3. **Relative Markdown Link Corrections:**
+   Because master templates live inside `templates/`, copy operations shift the relative path depth by one level:
 
-Use the authoritative guides linked from the handbook for current defaults. Reference the baseline revision; if a value changes, update its owner instead of creating a competing default in a copied template.
+| Target Document | Relative Link from `templates/` | Correct Relative Link when Copied to `docs/design/` |
+| :--- | :--- | :--- |
+| Main Requirements | `../../REQUIREMENTS.md` | `../REQUIREMENTS.md` |
+| Kubernetes Guide | `../../KUBERNETES.md` | `../KUBERNETES.md` |
+| High-Level Design (HLD) | `../HLD.md` | `HLD.md` |
+| Low-Level Design (LLD) | `../LLD.md` | `LLD.md` |
+| Design Review Checklist | `../DESIGN_REVIEW_CHECKLIST.md` | `DESIGN_REVIEW_CHECKLIST.md` |
+| Template Guide | `README.md` | `templates/README.md` |
 
-## Worked framing example — illustrative only
+---
 
-**Candidate problem:** A future benchmark shows legitimate connections reaching the admission limit while node resources remain available.
+## 5. Architectural Document Pre-Submission Checklist
 
-**Hypothesis:** Additional backend replicas might improve admission without breaching latency, memory or broker limits.
+Before requesting formal review on a proposal or ADR, the author must verify:
 
-**Evidence still needed:** Actual workload, connection distribution, queue/CPU/RSS data, Redis fan-out cost, rollout peak and recovery measurements. None is supplied by this example.
-
-**Options to compare:** Keep the baseline and reduce client load; optimize the identified bottleneck; change bounded admission if safe; add replicas if measured capacity permits.
-
-**Decision boundary:** Select an option only after tests establish the bottleneck and its trade-offs. More replicas on one node do not change the host failure domain. Any proposed numerical target must come from the relevant requirement or a reviewed revision.
-
-This example demonstrates reasoning structure. It does not select a new replica count, approve a budget or claim a successful test.
-
-## Evidence quality and safe records
-
-For a benchmark, record versions, commit/digests, configuration, environment, workload, warmup/window, raw samples and calculation method. For a security test, capture expected and denied paths plus effective identity. For a cost estimate, record quantities, regional rate sources, quote date, credits separately and retained resources.
-
-Use sanitized artifacts. Keep passwords, tokens, kubeconfig, private chat transcripts and Terraform state out of records. Link controlled evidence where appropriate and explain any access limitation without copying sensitive content.
-
-## Completion checklist
-
-- [ ] The problem, baseline and decision requested are clear.
-- [ ] Proposed values are distinguished from measured results.
-- [ ] Alternatives and meaningful drawbacks are recorded.
-- [ ] HLD, LLD, protocol/data, security and operational impacts are addressed.
-- [ ] Capacity, costs, migration overlap and teardown are accounted for.
-- [ ] Failure behavior, compatibility, rollback limits and forward repair are explicit.
-- [ ] Success/abort criteria and evidence ownership are testable.
-- [ ] Links work from the copied record's actual location.
-- [ ] Related specifications, index/register and changelog are updated as needed.
-- [ ] Review and implementation status match what actually happened.
-
-Use the [design review checklist](../DESIGN_REVIEW_CHECKLIST.md) and [release checklist](../../RELEASE_CHECKLIST.md) for their respective milestones.
+- [ ] Every assumption is labeled `[ASSUMPTION]` with an assigned validation owner and due date.
+- [ ] Explicit non-goals are listed; no unintended functional scope creep.
+- [ ] System invariants (single-writer pattern, bounded queues, default-deny policies) are preserved or formally modified.
+- [ ] Mathematical capacity models demonstrate CPU, memory, and bandwidth compliance under peak load.
+- [ ] Total recurring and migration cloud costs are calculated against the $\$100$ credit boundary.
+- [ ] Failure analysis includes RTO/RPO objectives, MTTR expectations, and data loss boundaries.
+- [ ] Rollback procedures include executable bash runbooks and automated PromQL abort triggers.
+- [ ] Acceptance criteria (AC) and non-functional requirements (NFR) traceability is fully populated.
+- [ ] All internal markdown links resolve correctly from the destination directory.

@@ -1,263 +1,259 @@
-# Architecture Change Proposal Template
+# Architecture Change Proposal (RFC) Template
+
+**Template Pack Revision 3 · 2026-10-26. Status: Unfilled Engineering Proposal.**
+
+Use this proposal template to make an architectural alteration, infrastructure overhaul, or capacity expansion concrete enough to review, simulate, deploy, monitor, and reverse. Read the [Template Guide](README.md) before drafting. Replace all bracketed markers with facts, mathematical models, or open items with assigned owners.
+
+---
+
+## 1. Proposal Identity & Executive Summary
+
+| Field | Value to Complete |
+| :--- | :--- |
+| **Proposal Identifier & Title** | `PROPOSAL-<number>-<short-slug>` (e.g., `PROPOSAL-04-k3s-servicelb-gateway`) |
+| **Design Status** | `DRAFT` / `IN_REVIEW` / `LAST_CALL` / `ACCEPTED` / `REJECTED` / `SUPERSEDED` |
+| **Delivery Status** | `NOT_STARTED` / `IN_PROGRESS` / `IMPLEMENTED` / `VERIFIED` / `RETIRED` |
+| **Author(s) & Discipline** | [Name(s) and engineering discipline] |
+| **Assigned Reviewers** | Technical Lead: `[Name]` · Security: `[Name]` · Infrastructure: `[Name]` |
+| **Submission / Review Dates** | Created: `YYYY-MM-DD` · Review Due: `YYYY-MM-DD` · Decision Due: `YYYY-MM-DD` |
+| **Baseline Architecture Revision** | Design Revision 5 (Kubernetes Baseline: local k3d + single-node AWS K3s) |
+| **Target Milestone & Environment** | Local k3d / AWS EC2 Mumbai `ap-south-1` / Production |
+| **Change Classification** | `CAPACITY` / `TOPOLOGY` / `PROTOCOL` / `SECURITY` / `OPERATIONAL` (select all affected) |
+| **Primary Decision Requested** | [One concise sentence defining the exact architectural choice to settle] |
+
+### Executive Summary
+> **Problem Statement:** Because [measured bottleneck, outage observation, or product requirement],
+> **Proposed Solution:** We propose [concrete architectural, manifest, or code change] for [workload/environment].
+> **Target Outcome:** Success is verified when [quantitative metrics and acceptance criteria met].
+> **Primary Trade-off:** The accepted drawback or residual operational complexity is [cost, complexity, SPOF].
+> **Fallback Safety:** If abort triggers fire, the system deterministically reverts via [automated rollback runbook].
+
+---
+
+## 2. Problem Statement, Baseline Architecture & Empirical Evidence
+
+### 2.1 The Observed Bottleneck or Architectural Driver
+Describe the concrete failure mode, resource saturation, or new product requirement necessitating this change. Distinguish observed empirical data from projected future needs.
+
+### 2.2 Baseline Evidence & Telemetry Snapshot
+| Evidence ID | Observation or Telemetry Metric | Environment & Date | Artifact / Data Source | Confidence Level |
+| :--- | :--- | :--- | :--- | :--- |
+| **EV-01** | E.g., Backend event loop lag breaches 100 ms under 128 clients. | AWS EC2 (c7i-flex.large) · `YYYY-MM-DD` | Prometheus histogram logs | `FACT` (Measured) |
+| **EV-02** | E.g., Host node free memory drops to 380 MiB during image pulls. | Local k3d · `YYYY-MM-DD` | `free -m` command output | `FACT` (Measured) |
+| **EV-03** | E.g., Single-worker Uvicorn saturates 100% of single vCPU core. | Benchmark harness · `YYYY-MM-DD` | k6 test execution report | `FACT` (Measured) |
+
+---
+
+## 3. Scope, Preserved Invariants & Explicit Non-Goals
 
-**Template revision 2 · 2026-10-26. This file is an unfilled template, not an accepted design or implementation.**
+| Architectural Domain | Current Baseline Contract | Proposed Alteration | Invariant Status |
+| :--- | :--- | :--- | :--- |
+| **Product Behavior** | Anonymous, single-room ephemeral chat. | [Unchanged or Proposed Change] | `PRESERVED` / `MODIFIED` |
+| **Wire Protocol** | Strict `chat.v1` JSON envelopes; plain text client frames. | [Unchanged or Proposed Change] | `PRESERVED` / `MODIFIED` |
+| **Concurrency Model** | Single-writer task per socket; bounded queues. | [Unchanged or Proposed Change] | `PRESERVED` / `MODIFIED` |
+| **Network Boundaries** | Default-deny NetworkPolicies; internal Redis isolated. | [Unchanged or Proposed Change] | `PRESERVED` / `MODIFIED` |
+| **Infrastructure Sizing** | 2-vCPU / 4-GiB single EC2 node; $512\text{ MiB}$ free headroom. | [Unchanged or Proposed Change] | `PRESERVED` / `MODIFIED` |
 
-Use this proposal to make an architecture change concrete enough to review, implement, measure and reverse. Read the [template guide](README.md) before copying it. Replace TBD values with facts, evidence or an open item with an owner and due date. Mark an inapplicable section `N/A — reason`; never invent results to complete a table.
+### Explicit Non-Goals
+* [E.g., Non-Goal 1: This proposal does NOT implement multi-region active-active database replication.]
+* [E.g., Non-Goal 2: This proposal does NOT introduce persistent user accounts or password authentication.]
 
-## 1. Proposal identity and summary
+---
+
+## 4. Success Criteria & Quantitative Guardrails
 
-| Field | Value to complete |
-| --- | --- |
-| Proposal ID and title | TBD — stable ID and specific outcome |
-| Design status | Draft / In review / Accepted / Rejected / Superseded |
-| Delivery status | Not started / In progress / Implemented / Verified / Retired |
-| Author, reviewers and operational owner | TBD — people or responsible roles |
-| Created / last updated / review due | TBD — explicit dates and timezone when scheduling |
-| Baseline design revision and source commit | TBD — identify the actual comparison point |
-| Target environment and milestone | Local / AWS demo / future service; TBD |
-| Related issue, ADR and previous proposal | TBD — links or None with reason |
-| Change class | Capacity / topology / protocol / data / security / operations; select all affected |
-| Decision requested | TBD — one sentence stating the design choice to settle |
+| Criterion ID | Metric / Performance Behavior | Current Baseline | Proposed Target | Measurement Methodology & Window |
+| :--- | :--- | :--- | :--- | :--- |
+| **SC-01** | P95 End-to-End Delivery Latency | 210 ms (Measured) | $< 150\text{ ms}$ | k6 load test: 25 clients, 5 msg/s for 30m. |
+| **SC-02** | Concurrent Socket Capacity | 128 connections | 512 connections | Sustained load test without socket drops. |
+| **SC-03** | Node Memory Headroom | 650 MiB free | $\ge 512\text{ MiB}$ free | Prometheus `node_memory_MemAvailable_bytes`. |
+| **SC-04** | Rollback Execution Time | 8 minutes | $< 10\text{ minutes}$ | Automated execution of `deploy/rollback.sh`. |
 
-**Summary to complete:** Because [observed problem or requested capability], propose [bounded change] for [users/environment]. Success means [measurable outcome]. The main trade-off is [cost, complexity or reliability consequence]. The fallback is [defined recovery path].
+---
 
-Design acceptance selects a technical direction. Record implementation, verification and resource spending separately; none is established by filling this template.
+## 5. Assumptions, Upstream Dependencies & Critical Path
 
-## 2. Problem, baseline and evidence
+| Item ID | Assumption or External Dependency | Impact on Architecture | Validation Methodology & Owner | Fallback if Invalidated |
+| :--- | :--- | :--- | :--- | :--- |
+| **DEP-01** | AWS Free Tier eligibility for `c7i-flex.large`. | Determines monthly billing ($0 vs $34). | Billing Owner / Check AWS Console | Fall back to `t4g.medium` (Arm). |
+| **DEP-02** | K3s ServiceLB compatibility with Flannel CNI. | Required for host-port packet routing. | Platform Owner / Run in k3d | Bind host ports directly to Nginx. |
+| **DEP-03** | Let's Encrypt automated TLS certificate issuance. | Required for valid public HTTPS/WSS. | Security Owner / Test cert-manager | Use self-signed cert for local tests. |
 
-Describe the user-visible problem, why it matters now, and what happens if no change is made. Distinguish an observed bottleneck from an anticipated workload or product request.
+---
 
-| Evidence ID | Observation or requirement | Environment / date / version | Artifact or source | Confidence / limitation |
-| --- | --- | --- | --- | --- |
-| E-01 | TBD | TBD | TBD — sanitized logs, benchmark, requirement or official reference | TBD |
-| E-02 | TBD | TBD | TBD | TBD |
+## 6. High-Level Design (HLD) Impact: Topologies & Trust Boundaries
 
-Record current connections, attempted and accepted message rate, payload distribution, recipient fan-out, Pod/node utilization and incident frequency when relevant. Include raw counts and observation windows; a single percentile without workload context is not a baseline.
+### 6.1 Target Topology Diagram
+```mermaid
+flowchart TB
+    Client["Browser Client"] --> Ingress["Target Ingress Routing Layer"]
+    subgraph TargetCluster["Target Kubernetes Cluster"]
+        GW["gateway Pod (Nginx)"]
+        BE["backend Pod Mesh (FastAPI)"]
+        Broker["broker Pod (Redis / Dragonfly)"]
+    end
+    Ingress --> GW
+    GW --> BE
+    BE <--> Broker
+```
 
-If the application is not implemented, say **not measured**. Use an explicit hypothesis and planned experiment instead of a fabricated before/after result.
+### 6.2 Component Responsibility Diff
+| Component | Baseline Responsibility | Proposed Responsibility | State Ownership Changes |
+| :--- | :--- | :--- | :--- |
+| **Gateway** | Nginx reverse proxy + TLS termination. | [Unchanged or describe additions] | Stateless; no changes. |
+| **Backend** | 2 replicas running FastAPI/Uvicorn. | [E.g., 4 replicas running uvloop] | AsyncIO memory state per Pod. |
+| **Broker** | Singleton Redis 7 Pub/Sub. | [E.g., Dragonfly in-memory engine] | Ephemeral; zero disk writes. |
 
-## 3. Scope, invariants and non-goals
+---
 
-| Concern | Current contract / owner | Proposed change | Preserved invariant or deliberate break |
-| --- | --- | --- | --- |
-| Product behavior | [Requirements](../../REQUIREMENTS.md) | TBD | TBD |
-| Public protocol | [API](../../API_SPECIFICATION.md) | TBD | TBD |
-| Configuration and resource bounds | [Configuration](../../CONFIGURATION.md) | TBD | TBD |
-| Runtime and networking | [Kubernetes](../../KUBERNETES.md) | TBD | TBD |
-| Security and data | [Security](../../SECURITY.md) | TBD | TBD |
-| Release and operations | [Deployment](../../DEPLOYMENT.md), [operations](../../OPERATIONS.md) | TBD | TBD |
+## 7. Low-Level Design (LLD) Impact: Interfaces & Async Concurrency
 
-List explicit non-goals. For this project, address whether anonymous identity, one global room, session-first ordering, ephemeral Pub/Sub and single-node availability remain unchanged. If any changes, identify the new requirement and affected contract.
+### 7.1 Changed or Added Module Interfaces
+Describe new Python or JavaScript classes, async tasks, and conceptual contracts:
 
-## 4. Success criteria and guardrails
+```python
+# Conceptual Interface Diff
+class ProposedBrokerAdapter(Protocol):
+    async def publish_event(self, channel: str, payload: bytes) -> bool:
+        """Publishes serialized event with strict 1.0s timeout."""
+        ...
 
-| Criterion ID | Metric or behavior | Baseline / evidence | Target and window | Measurement / acceptance rule |
-| --- | --- | --- | --- | --- |
-| SC-01 | TBD — user-visible outcome | TBD | TBD | TBD |
-| SC-02 | TBD — recovery or compatibility | TBD | TBD | TBD |
-| SC-03 | TBD — resource/cost boundary | TBD | TBD | TBD |
+    async def subscribe_stream(self, channel: str) -> AsyncIterator[bytes]:
+        """Supervised subscriber yielding broadcast events."""
+        ...
+```
 
-Define numerator, denominator, units, sample size, warmup, steady interval and excluded events for rate/latency targets. Report rejected or ambiguous sends separately so exclusions do not hide failures.
+### 7.2 Concurrency & Task Topology Impact
+* **Task Ownership:** [Who spawns, supervises, and cancels new tasks?]
+* **Queue Invariants:** [Verify preservation of $N \le 32$ items and $B \le 256\text{ KiB}$ bounds.]
+* **Cancellation Safety:** [Verify clean exception handling on `asyncio.CancelledError`.]
 
-Map targets to existing FR/AC/NFR IDs or propose explicit revisions. Do not silently replace the current targets. Separate healthy-run objectives, fault-run behavior and operational recovery.
+---
 
-## 5. Assumptions, dependencies and blockers
+## 8. Data & Wire Protocol Compatibility Matrix
 
-| ID | Assumption or dependency | Why it matters | Validation / owner / due | Fallback if false |
-| --- | --- | --- | --- | --- |
-| A-01 | TBD — unverified premise | TBD | TBD | TBD |
-| D-01 | TBD — version, permission, service or team dependency | TBD | TBD | TBD |
+| Client / Server Interaction | Old Client (v1.0) | Proposed Client (v1.1) | Compatibility Behavior & Fallback |
+| :--- | :--- | :--- | :--- |
+| **Old Server (v1.0)** | `COMPATIBLE` | `COMPATIBLE` | Client preserves strict schema fields. |
+| **Proposed Server (v1.1)** | `COMPATIBLE` | `COMPATIBLE` | Envelopes preserve `chat.v1` JSON structure. |
+| **Cross-Version Fan-Out** | Both clients receive identical broadcast events across the shared Redis bus without errors. |
 
-Identify the critical path: version compatibility, account/region access, registry permissions, real hostname/TLS, deployment route, capacity measurement and responsible operator. Check [open decisions](../../DECISIONS_AND_RISKS.md) before treating a previously proposed value as resolved.
+---
 
-## 6. HLD: components, deployment and trust boundaries
+## 9. Formal Capacity Model, Resource Equations & Sizing Impact
 
-Describe both current and target topology. Link or include Mermaid context/deployment diagrams with a legend distinguishing application traffic, administration, provisioning and replication. Label future components as proposed.
+### 9.1 Sizing Calculations (Applying [Capacity Planning](../CAPACITY_PLANNING.md))
+$$\Delta M_{\text{node}} = \Delta M_{\text{workloads}} + \Delta M_{\text{queues}} + \Delta M_{\text{kernel}}$$
 
-| Component | Before → after | State and interface ownership | Placement / failure domain | Scaling and recovery |
-| --- | --- | --- | --- | --- |
-| Gateway / frontend | TBD | TBD | TBD | TBD |
-| Backend workloads | TBD | TBD | TBD | TBD |
-| Broker / persistent store, if any | TBD | TBD | TBD | TBD |
-| Control plane / infrastructure | TBD | TBD | TBD | TBD |
+* **Memory Request / Limit Delta:**
+  * Gateway: Request: `50m / 32Mi` $\to$ `[New Value]` · Limit: `250m / 64Mi` $\to$ `[New Value]`
+  * Backend (each): Request: `100m / 128Mi` $\to$ `[New Value]` · Limit: `500m / 256Mi` $\to$ `[New Value]`
+  * Redis: Request: `50m / 64Mi` $\to$ `[New Value]` · Limit: `250m / 128Mi` $\to$ `[New Value]`
+* **Projected Steady-State Free Memory:** `[Calculated free MemAvailable]` $\ge 512\text{ MiB}$.
 
-State how clients reach healthy endpoints after failure, not only how many nodes exist. Name remaining singleton components and shared failure points.
+---
 
-| Source → destination | Protocol / port | Identity or trust mechanism | Network enforcement | Failure behavior |
-| --- | --- | --- | --- | --- |
-| TBD | TBD | TBD | TBD | TBD |
+## 10. Failure Mode & Effects Analysis (FMEA)
 
-Include DNS, certificates, private diagnostics, external dependencies and administrative routes. Identify changes to Kubernetes Services, public exposure, network policies, node access and metadata access.
+| Failure Scenario | Detection Mechanism | Immediate User Impact | Automated Recovery Action | Target MTTR |
+| :--- | :--- | :--- | :--- | :--- |
+| **Broker Process Crash** | Watchdog nonce timeout $> 10\text{s}$. | Brief message delivery pause. | Pod restarted by K8s; backends reconnect. | $< 15\text{s}$ |
+| **Backend OOM Eviction** | Kubelet cgroup OOM alert. | Sockets on that Pod disconnect. | Clients reconnect with full jitter to surviving Pod. | $< 10\text{s}$ |
+| **Network Partition** | TCP keepalive timeout (300s). | Sockets terminate. | Clients back off and reconnect. | $< 30\text{s}$ |
 
-## 7. LLD: interfaces, concurrency and resource ownership
+---
 
-Link the affected [LLD](../LLD.md) modules and proposed source paths. For each changed interface, describe inputs, outputs, errors, timeout, cancellation and owner; do not present invented function names as existing code.
+## 11. Security, Zero-Trust & STRIDE Threat Review
 
-| Module / interface | Input → output | State owner / lifecycle | Bounds and timeout | Failure / cleanup invariant |
-| --- | --- | --- | --- | --- |
-| TBD | TBD | TBD | TBD | TBD |
+* **Least Privilege:** [Do new workloads require elevated permissions or host namespaces?]
+* **Network Isolation:** [Are new ports exposed via NetworkPolicies?]
+* **Secret Handling:** [Are new credentials stored exclusively in Kubernetes Secret volumes?]
+* **STRIDE Diff:** [Detail any new attack vectors and their corresponding controls.]
 
-Describe the main sequence and at least one failure sequence. For asynchronous work, state who creates/awaits tasks, owns writes, releases reservations and prevents duplicate cleanup. Account for queue entries, encoded bytes, in-flight data and transport buffers separately.
+---
 
-For this chat app, explicitly assess:
+## 12. Financial Budgeting, AWS Free Tier Ledger & Teardown
 
-- Session-first ordering during connection initialization and replacement.
-- Admission races, per-socket and per-replica budgets.
-- Subscriber generation, heartbeat freshness and ambiguous publication.
-- Slow-client isolation and single-writer ownership.
-- Signal handling, Pod termination budget and reconnect storms.
-- Stale browser callbacks, preserved drafts and terminal versus retryable errors.
+| Cloud Resource | Proposed Sizing / Quantity | Unit Rate (ap-south-1) | Monthly Cost | Credit Offset Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **EC2 Compute** | 1x `c7i-flex.large` (720 hrs) | $0.0476 / hr | $34.27 | Eligible Free Tier / Credit |
+| **EBS Storage** | 20 GiB gp3 SSD | $0.096 / GB-mo | $1.92 | Credit Offset |
+| **Public IPv4** | 1 In-Use IPv4 (720 hrs) | $0.005 / hr | $3.60 | Credit Offset |
+| **Total Gross Spend** | — | — | **$39.79** | **Fully within $100 Budget** |
 
-## 8. Data and protocol compatibility
+---
 
-| Combination or scenario | Expected behavior | Contract/version rule | Test and fallback |
-| --- | --- | --- | --- |
-| Old client → new server | TBD | TBD | TBD |
-| New client → old server | TBD | TBD | TBD |
-| Old and new backend replicas share broker | TBD | TBD | TBD |
-| Reconnect during transition | TBD | TBD | TBD |
-| Restored old release reads new data | TBD or N/A with reason | TBD | TBD |
+## 13. Observability, Telemetry & Anomaly Trigger Rules
 
-The current strict event schema is authoritative; do not assume extra fields are safe. Identify negotiation, event-size changes, ordering scope, idempotency and acknowledgment semantics.
+Specify the Prometheus metrics and PromQL alerts monitoring this change:
 
-For persistent data, define authoritative writer, schema constraints, indexes, retention, deletion, backup/restore, cursor/replay behavior and handling of duplicate or out-of-order events. Describe partial failure between storage and publication. If data remains ephemeral, state what can be lost and why a rollback cannot recover it.
+```promql
+# Alert: High Handshake Denial Rate
+sum(rate(websocket_handshake_rejections_total[2m])) 
+/ 
+sum(rate(websocket_handshake_attempts_total[2m])) > 0.05
+```
 
-## 9. Capacity model and operating envelope
+---
 
-| Quantity | Current measurement | Proposed workload / limit | Model or evidence | Margin / uncertainty |
-| --- | --- | --- | --- | --- |
-| Concurrent sockets and distribution | TBD | TBD | TBD | TBD |
-| Attempted / accepted messages per second | TBD | TBD | TBD | TBD |
-| Payload / serialized event bytes | TBD | TBD | TBD | TBD |
-| Recipient deliveries and broker fan-out | TBD | TBD | TBD | TBD |
-| Per-Pod CPU, memory, queues and descriptors | TBD | TBD | TBD | TBD |
-| Node/platform overhead and disk growth | TBD | TBD | TBD | TBD |
-| Rollout/reconnect peak | TBD | TBD | TBD | TBD |
+## 14. Evaluated Alternatives & Comparative Trade-offs
 
-Use [capacity planning](../CAPACITY_PLANNING.md) for calculations. For a global room, distinguish client-delivery work from broker-to-replica fan-out. Do not equate an admission ceiling or memory request with demonstrated capacity.
+| Architectural Option | Pros | Cons | Financial Impact | Outcome |
+| :--- | :--- | :--- | :--- | :--- |
+| **Candidate A: [Selected]** | [Primary advantage] | [Primary trade-off] | $[Gross Cost] | **SELECTED** |
+| **Candidate B: [Alternative]** | [Advantage] | [Fatal flaw] | $[Gross Cost] | REJECTED |
+| **Candidate C: [Status Quo]** | Zero implementation risk. | Bottleneck persists. | $0.00 | REJECTED |
 
-Specify the bottleneck, instrumentation, load progression, saturation signal, operating margin and what would trigger another redesign. If autoscaling is proposed, define metrics ownership, stale/missing-metric behavior, limits, stabilization, node capacity and scale-down effects on existing sockets.
+---
 
-## 10. Reliability and failure analysis
+## 15. The 8-Gate Implementation & Staged Rollout Plan
 
-| Failure scenario | Detection and user impact | Containment / retry policy | Data-loss boundary | Recovery objective / evidence |
-| --- | --- | --- | --- | --- |
-| Backend termination or crash | TBD | TBD | TBD | TBD |
-| Redis failure or stalled subscriber | TBD | TBD | TBD | TBD |
-| Node / ingress / control-plane loss | TBD | TBD | TBD | TBD |
-| Slow receiver or reconnect surge | TBD | TBD | TBD | TBD |
-| Invalid config, secret or artifact | TBD | TBD | TBD | TBD |
-| Additional change-specific failure | TBD | TBD | TBD | TBD |
+Execute rollout in strict accordance with the [Migration Playbook](../MIGRATION_PLAYBOOK.md):
+* **Gate 1 (Baseline):** Capture baseline telemetry.
+* **Gate 2 (Design Approval):** Complete this RFC and gain sign-offs.
+* **Gate 3 (Rehearsal):** Run full test suite in local `k3d`.
+* **Gate 4 (Pre-Flight):** Verify Cosign image signatures and secrets.
+* **Gate 5 (Apply):** `kubectl apply -k k8s/overlays/aws/`.
+* **Gate 6 (Drain):** Paced `1012` close frame drain across 10 seconds.
+* **Gate 7 (Soak):** 30-minute metric stabilization observation.
+* **Gate 8 (Retire):** Decommission legacy images and temporary secrets.
 
-For any RTO (recovery time objective), define start/end events and the user-visible verification. For any RPO (recovery point objective), identify the durable data and restore boundary; use N/A with explanation where no durable history exists.
+---
 
-Explain whether added redundancy covers application, control plane, ingress and broker separately. Test partial failures and recovery, not only complete restarts.
+## 16. Abort Triggers, Rollback Runbook & Forward Repair
 
-## 11. Security, privacy and abuse review
+### 16.1 Automated Rollback Conditions
+If any of the following occur during Gates 5–7, abort immediately:
+1. P95 latency $> 250\text{ ms}$ for $> 60\text{ seconds}$.
+2. Error rate (5xx or unhandled exceptions) $> 1\%$.
+3. Node free memory $< 512\text{ MiB}$.
 
-| Asset / boundary | Threat or misuse | Proposed control | Negative test | Residual risk / owner |
-| --- | --- | --- | --- | --- |
-| Public connection and user content | TBD | TBD | TBD | TBD |
-| Internal service and broker access | TBD | TBD | TBD | TBD |
-| Secrets / deployment identity | TBD | TBD | TBD | TBD |
-| Artifacts / administrator / node | TBD | TBD | TBD | TBD |
+### 16.2 Executable Rollback Command
+```bash
+kubectl apply -f /opt/chat-app/releases/release-manifest-previous.yaml
+kubectl rollout status deployment/backend -n chat-app --timeout=180s
+```
 
-Document least privilege, secret issuance/rotation/revocation, public/private paths, unsafe Pod permissions, log redaction and evidence access. Explain how the change affects anonymous abuse controls or future authenticated authorization.
+---
 
-Identify what data is collected, who can read it, how long it lives and how it is deleted. Do not include real credentials, private messages, kubeconfig or raw Terraform state in this proposal.
+## 17. Empirical Verification & Acceptance Evidence Contract
 
-## 12. Cost, account constraints and teardown
+| Test ID | Traceable AC / NFR | Test Scenario & Command | Expected Outcome | Verification Status |
+| :--- | :--- | :--- | :--- | :--- |
+| **V-01** | AC-01 (Topology) | `kubectl get pods -n chat-app` | 5 Pods `1/1 Ready` | `PENDING` |
+| **V-02** | AC-02 (Messaging) | `pytest tests/e2e/test_fanout.py` | Cross-pod echo $< 250\text{ ms}$ | `PENDING` |
+| **V-03** | NFR-06 (Headroom) | Prometheus memory exporter | Free RAM $\ge 512\text{ MiB}$ | `PENDING` |
 
-| Resource or activity | Region / quantity / runtime | Quoted rate and date / source | Gross estimate | Owner and removal condition |
-| --- | --- | --- | --- | --- |
-| Compute / control plane | TBD | TBD | TBD | TBD |
-| Storage / snapshots / backups | TBD | TBD | TBD | TBD |
-| Address / ingress / transfer | TBD | TBD | TBD | TBD |
-| Broker / database / monitoring | TBD | TBD | TBD | TBD |
-| Migration overlap / temporary tests | TBD | TBD | TBD | TBD |
+---
 
-Separate one-time migration costs, recurring usage and retained-resource costs. Record estimate range, currency, assumptions and unpriced items.
+## 18. Governance Sign-Off & Post-Migration Audit
 
-Record actual eligible credit balance, expiry, shared-account usage, reserve, planned end time and billing owner using [AWS requirements](../../AWS_FREE_TIER_REQUIREMENTS.md). Credits offset eligible charges; they do not change gross usage cost. Do not infer ongoing funding for a future HA design from the initial demo budget.
+* **Technical Lead Approval:** `APPROVED` / `REJECTED` — [Name] (`YYYY-MM-DD`)
+* **Security Sign-Off:** `APPROVED` / `REJECTED` — [Name] (`YYYY-MM-DD`)
+* **Infrastructure Sign-Off:** `APPROVED` / `REJECTED` — [Name] (`YYYY-MM-DD`)
 
-State alert routing, response, scheduled teardown and inventory/billing checks. An alert alone is not the stop mechanism.
-
-## 13. Observability and operations
-
-| Signal / symptom | Source and bounded dimensions | Detection threshold / window | Action and owner | Evidence retention |
-| --- | --- | --- | --- | --- |
-| TBD | TBD | TBD | TBD | TBD |
-
-Describe dashboards or diagnostic views, alert delivery tests, runbook changes, secret/certificate renewal, on-call or demo ownership and maintenance windows. Avoid identifiers or message text as unbounded metric labels.
-
-Provide a diagnostic path from user symptom to gateway, backend, broker and node evidence. State how operation continues if telemetry is unavailable.
-
-## 14. Alternatives and recommended design
-
-Compare keeping the current design and at least one feasible alternative. Record assumptions behind projected benefits and distinguish measured values from estimates.
-
-| Option | Meets required behavior? | Capacity / failure behavior | Cost / operating effort | Compatibility / reversibility | Evidence and disposition |
-| --- | --- | --- | --- | --- | --- |
-| Keep baseline | TBD | TBD | TBD | TBD | TBD |
-| Option A | TBD | TBD | TBD | TBD | TBD |
-| Option B or N/A | TBD | TBD | TBD | TBD | TBD |
-
-Explain the recommendation in plain language. If using scores, publish criteria, weights and uncertainty; a score must not conceal an unmet mandatory security or correctness requirement.
-
-## 15. Implementation and migration plan
-
-| Step / checkpoint | Action and environment | Owner / dependency | Verification / evidence | Stop or restore action |
-| --- | --- | --- | --- | --- |
-| Prepare | TBD | TBD | TBD | TBD |
-| Rehearse | TBD | TBD | TBD | TBD |
-| Introduce compatible changes | TBD | TBD | TBD | TBD |
-| Cut over / drain | TBD | TBD | TBD | TBD |
-| Observe | TBD | TBD | TBD | TBD |
-| Retire old path/resources | TBD | TBD | TBD | TBD |
-
-Use the [migration playbook](../MIGRATION_PLAYBOOK.md). Include credential/bootstrap work, release verification, concurrency control, interrupted-operation recovery and human ownership. Canary or parallel stacks require implemented traffic selection and sufficient temporary capacity.
-
-Define the mixed-version period and what happens to existing WebSockets. Identify every irreversible step and the last safe rollback checkpoint before it.
-
-## 16. Abort conditions, rollback and forward repair
-
-| Trigger | Threshold / observation window | Decision owner | Recovery action | Functional proof after recovery |
-| --- | --- | --- | --- | --- |
-| Correctness / authorization regression | TBD | TBD | TBD | TBD |
-| Availability / latency / resource regression | TBD | TBD | TBD | TBD |
-| Cost or migration boundary breached | TBD | TBD | TBD | TBD |
-
-Record prior image/configuration/Secret references and independently verified artifacts. A complete rollback restores compatible resources, not only a Deployment revision. Never restore a revoked credential.
-
-Explain when binary rollback becomes unsafe because data or contracts changed. Provide a forward-repair or restore path with explicit data-loss implications, recovery prerequisites and communication. State how failure of rollback is detected and handled.
-
-## 17. Verification and release evidence
-
-| Test ID | Requirement / AC / NFR | Scenario and environment | Expected outcome | Artifact / owner / result |
-| --- | --- | --- | --- | --- |
-| V-01 | TBD | Normal functional path | TBD | Pending |
-| V-02 | TBD | Boundary / negative / authorization | TBD | Pending |
-| V-03 | TBD | Mixed-version or failure recovery | TBD | Pending |
-| V-04 | TBD | Load / rollout peak / rollback | TBD | Pending |
-| V-05 | TBD | Cleanup / retained resources | TBD | Pending |
-
-Record versions, commit, image digests, configuration hashes, sampling method and limitations. Keep raw evidence sanitized and link a readable summary. A local test does not establish AWS routing, pricing or instance behavior.
-
-Define the acceptance window, required regression coverage, unresolved findings and how time-limited exceptions are owned and revisited. Keep implementation verification separate from design review.
-
-## 18. Review outcome, follow-up and design updates
-
-| Reviewer / role | Area reviewed | Outcome / date | Blocker or condition | Evidence / resolution owner |
-| --- | --- | --- | --- | --- |
-| TBD | TBD | Pending | TBD | TBD |
-
-**Decision:** TBD. **Accepted scope:** TBD. **Unresolved conditions:** TBD. **Related ADR:** TBD.
-
-| Task / document | Owner | Dependency / due | Completion evidence |
-| --- | --- | --- | --- |
-| HLD, LLD and sequence/data diagrams | TBD | TBD | TBD |
-| Requirements, API, configuration and tests | TBD | TBD | TBD |
-| Platform, security, deployment and operations | TBD | TBD | TBD |
-| Implementation, rollout and cleanup | TBD | TBD | TBD |
-
-Set a post-change review date and revisit triggers, including failed assumptions, new workload, changed budget, security findings or unacceptable operational effort. Record expected versus observed results after implementation and update the [decision register](../../DECISIONS_AND_RISKS.md).
+### Post-Migration Audit Notes:
+* *Rollout Completed At:* `YYYY-MM-DD HH:MM UTC`
+* *Actual P95 Latency Observed:* `XX ms`
+* *Actual Steady-State Free RAM:* `XXX MiB`
+* *Residual Unresolved Items:* `[None or list actionable bug tickets]`
