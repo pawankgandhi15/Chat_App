@@ -19,6 +19,9 @@ This file records actual repository changes. Planned application features remain
 ### Updated - 2026-10-26
 
 - Reorganized the README with a clear project status, architecture diagram, planned stack, reading paths, grouped documentation index and implementation roadmap.
+- Added an AWS architecture illustration for the planned Mumbai-region single-host deployment.
+- Refined the architecture illustration with security-group rules, explicit Docker network membership, EC2/EBS details and independent Terraform provisioning/state connections; retained the original image and saved the generation prompt.
+- Featured the updated AWS architecture image near the top of the README with an accessible description and a full-size link.
 - Corrected README capability and capacity wording to distinguish proposed design from verified implementation and align the candidate workload with the requirements.
 
 ### Clarified

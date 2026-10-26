@@ -6,6 +6,12 @@ A documented engineering project exploring WebSocket communication across backen
 
 [Architecture](docs/ARCHITECTURE.md) · [Frontend & UI/UX](docs/FRONTEND.md) · [Backend](docs/BACKEND.md) · [Implementation plan](docs/IMPLEMENTATION_PLAN.md) · [AWS requirements](docs/AWS_FREE_TIER_REQUIREMENTS.md)
 
+## AWS Architecture Diagram
+
+![Planned Chat App architecture in AWS Mumbai: browser users connect through an Internet Gateway to a single EC2 instance running an Nginx gateway, static frontend, two FastAPI replicas and Redis. Terraform provisions infrastructure through AWS APIs and stores state separately in S3.](docs/images/aws-single-host-architecture-v2.png)
+
+*Planned single-host deployment in `ap-south-1` (Mumbai). [Open the full-size diagram](docs/images/aws-single-host-architecture-v2.png).*
+
 ## Project Status
 
 **Current phase: documentation and design.** This repository contains requirements, technical specifications and implementation plans. Application source code, Docker configurations, Terraform resources and CI/CD workflows have yet to be implemented.
@@ -39,32 +45,11 @@ The project brings application development and operations into one workflow: def
 
 The deployment target is **five application containers across four Compose services** on one EC2 instance. The backend service runs as two replicas.
 
-```mermaid
-flowchart TB
-    Browser[Browser clients]
-
-    subgraph EC2[Single AWS EC2 host]
-        Gateway[Nginx gateway]
-        Frontend[Nginx static frontend]
-        BackendA[FastAPI replica A]
-        BackendB[FastAPI replica B]
-        Redis[Redis Pub/Sub]
-
-        Gateway -->|Static pages and assets| Frontend
-        Gateway -->|WebSocket connections| BackendA
-        Gateway -->|WebSocket connections| BackendB
-        BackendA <-->|Publish and subscribe| Redis
-        BackendB <-->|Publish and subscribe| Redis
-    end
-
-    Browser -->|HTTPS / WSS| Gateway
-```
-
 1. Nginx serves as the public entry point and routes static requests and WebSocket connections.
 2. Each backend validates incoming messages and publishes a server-generated event to Redis.
 3. Both backends consume the event and deliver it through bounded queues to their connected clients.
 
-Only the gateway publishes application ports on the host. Redis uses an internal data network; gateway and frontend have no direct Redis connection. Backend replication demonstrates distributed messaging within one host and does not provide host-level high availability.
+Only the gateway publishes application ports on the host. Redis uses an internal data network; gateway and frontend have no direct Redis connection. Terraform stores infrastructure state and lockfiles in S3, outside the chat message path. Backend replication demonstrates distributed messaging within one host and does not provide host-level high availability.
 
 See the [architecture guide](docs/ARCHITECTURE.md) for networking, lifecycle and failure behavior, and the [API specification](docs/API_SPECIFICATION.md) for the wire contract.
 
