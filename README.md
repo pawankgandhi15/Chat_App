@@ -4,7 +4,7 @@
 
 Baatchit is a lightweight browser-based messaging app. Open one shared room, choose a temporary display name and exchange live text messages across two backend replicas. The responsive interface preserves unsent drafts through reconnects and renders messages safely as text.
 
-[Run locally](docs/DEVELOPMENT.md) · [Implementation evidence](docs/IMPLEMENTATION_STATUS.md) · [API contract](docs/API_SPECIFICATION.md) · [System design](docs/design/README.md)
+[Run locally](docs/DEVELOPMENT.md) · [Complete project and interview guide](docs/PROJECT_INTERVIEW_GUIDE.md) · [Implementation evidence](docs/IMPLEMENTATION_STATUS.md) · [API contract](docs/API_SPECIFICATION.md) · [System design](docs/design/README.md)
 
 ## Project status
 
@@ -203,6 +203,7 @@ Application resources use the `baatchit` namespace and local cluster name, `k3d-
 
 | Guide | Contents |
 | --- | --- |
+| [Complete Project and Interview Guide](docs/PROJECT_INTERVIEW_GUIDE.md) | End-to-end explanation, implementation evidence and 130 detailed interview questions covering concurrency, sharding, scaling, consistency and operations |
 | [Requirements](docs/REQUIREMENTS.md) | User journeys, scope, acceptance criteria and measurable objectives |
 | [Architecture](docs/ARCHITECTURE.md) | Service topology, event flow, concurrency and failure behavior |
 | [System Design: HLD, LLD and Future Growth](docs/design/README.md) | Detailed design, sequence/data models, capacity planning, upgrade stages, migration and review templates |
