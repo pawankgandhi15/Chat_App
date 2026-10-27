@@ -1,0 +1,5 @@
+[tool.pytest.ini_options]
+pythonpath = ["backend", "."]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = ["integration: requires real Redis", "browser: requires a running frontend and browser"]

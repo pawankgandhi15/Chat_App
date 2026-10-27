@@ -1,0 +1,8 @@
+# Check actual eligibility, quote and operator values before use.
+owner = "REPLACE_WITH_OWNER"
+teardown_date = "REPLACE_WITH_YYYY-MM-DD"
+ubuntu_ami_id = "REPLACE_WITH_REVIEWED_AMI"
+availability_zone = "ap-south-1a"
+ec2_key_name = "REPLACE_WITH_EXISTING_KEY"
+admin_ssh_cidrs = ["REPLACE_WITH_APPROVED_IP/32"]
+k3s_binary_sha256 = "REPLACE_WITH_OFFICIAL_AMD64_CHECKSUM"

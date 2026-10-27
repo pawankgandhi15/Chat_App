@@ -1,0 +1,114 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ChatAppV1EventEnvelope",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "container_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Container Id",
+          "type": "string"
+        },
+        "user": {
+          "pattern": "^[A-Za-z0-9_-]{1,32}$",
+          "title": "User",
+          "type": "string"
+        },
+        "sent_at": {
+          "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
+          "title": "Sent At",
+          "type": "string"
+        },
+        "type": {
+          "const": "session",
+          "default": "session",
+          "title": "Type",
+          "type": "string"
+        },
+        "connection_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Connection Id",
+          "type": "string"
+        }
+      },
+      "required": [
+        "container_id",
+        "user",
+        "sent_at",
+        "connection_id"
+      ],
+      "title": "SessionEvent",
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "schema_version": {
+          "const": 1,
+          "default": 1,
+          "title": "Schema Version",
+          "type": "integer"
+        },
+        "container_id": {
+          "maxLength": 64,
+          "minLength": 1,
+          "title": "Container Id",
+          "type": "string"
+        },
+        "user": {
+          "pattern": "^[A-Za-z0-9_-]{1,32}$",
+          "title": "User",
+          "type": "string"
+        },
+        "sent_at": {
+          "pattern": "^\\d{4}-\\d\\d-\\d\\dT\\d\\d:\\d\\d:\\d\\d\\.\\d{3}Z$",
+          "title": "Sent At",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "chat",
+            "system"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "event_id": {
+          "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$",
+          "title": "Event Id",
+          "type": "string"
+        },
+        "text": {
+          "maxLength": 2000,
+          "minLength": 1,
+          "title": "Text",
+          "type": "string"
+        },
+        "time": {
+          "pattern": "^\\d\\d:\\d\\d:\\d\\d UTC$",
+          "title": "Time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "container_id",
+        "user",
+        "sent_at",
+        "type",
+        "event_id",
+        "text",
+        "time"
+      ],
+      "title": "BroadcastEvent",
+      "type": "object"
+    }
+  ]
+}

@@ -1,161 +1,111 @@
-# Deployment, Rollout & Rollback Procedures
+# Deployment and recovery
 
-**Design Revision 5 — 2026-10-26. Status: Production Operational Specification.** This document defines the transactional deployment lifecycle, OCI cryptographic verification, zero-downtime rolling update mechanics, and automated 10-minute rollback runbooks for Chat App.
+The local Kubernetes deployment is working. AWS infrastructure and signed delivery tooling are implemented, but no AWS environment, public certificate, registry release or cloud rollback rehearsal has been created by this implementation. See [implementation status](IMPLEMENTATION_STATUS.md).
 
----
+## Local deployment
 
-## 1. Release Packaging & Cryptographic Provenance
+Follow [Development](DEVELOPMENT.md). The local launcher builds/imports images and applies the local Kustomize overlay. It needs no AWS account.
 
-Every production release is encapsulated in an immutable, cryptographically signed release bundle conforming to `release.schema.json`:
+## AWS prerequisites
 
-```mermaid
-flowchart LR
-    Source["Git Commit (Signed)"] --> CI["GitHub Actions Pipeline"]
-    CI --> Build["BuildKit Multi-Stage Build"]
-    Build --> Digest["Immutable OCI Digest (@sha256:...)"]
-    Digest --> Cosign["Cosign Signature Injection"]
-    Cosign --> Bundle["Signed Release Bundle<br/><i>(Manifests + Hashes + SBOM)</i>"]
-    Bundle --> Verifier["Deployer Verifier Agent"]
-    Verifier --> K8s["K3s Cluster Apply"]
+Before provisioning, supply and review:
 
-    classDef pipe fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
-    class Source,CI,Build,Digest,Cosign,Bundle,Verifier,K8s pipe;
-```
+- AWS account/region, actual credit eligibility, cost estimate, budget notifications and teardown owner/date.
+- A reviewed Ubuntu 24.04 x86_64 AMI for the region, AZ, existing EC2 SSH key and restricted administrator IPv4 CIDRs.
+- The SHA-256 checksum for the selected official K3s binary.
+- A real DNS hostname and trusted TLS certificate/key, with a renewal procedure.
+- A private Terraform state bucket and separate state/workload identities.
+- A controlled Linux deployment runner with private API access, pinned kubectl/Cosign and the Python dependencies from the hashed lock.
+- Publicly readable GHCR application images, or separately configured node registry authentication. The current manifests do not provision image-pull credentials.
 
-### Release Manifest Content Requirements
-1. **Source Provenance:** Pinned Git commit SHA, build timestamp, and semantic `RELEASE_ID` (e.g., `20261026.1-sha.4c6607d`).
-2. **Pinned Image Digests:** Exact `@sha256:...` digest references for `gateway`, `frontend`, `backend`, and `redis`. Mutable tags (e.g., `:latest`) are permanently blocked.
-3. **Configuration Hashes:** SHA-256 checksums of rendered base and overlay Kustomize manifests.
-4. **Attestation Links:** Cosign cryptographic signatures, Syft SBOM attachments, and Trivy scan clearance reports.
+The code uses one K3s node and K3s ServiceLB. There is no EKS control plane, NAT gateway or managed load balancer. AWS services may still incur charges; account credits are not a zero-cost guarantee.
 
----
+## Terraform
 
-## 2. Transactional Deployment State Machine
+Two independent roots exist:
 
-Deployments execute through a deterministic 7-stage state machine. If any gate fails, **the process terminates without mutating subsequent resources**:
+| Directory | Responsibility |
+| --- | --- |
+| `infra/bootstrap-state` | Private encrypted/versioned S3 state bucket, TLS-only access, deletion protection |
+| `infra/workload` | VPC, public subnet, routes, restricted security group, EC2 and encrypted 20 GiB gp3 root volume |
 
-```mermaid
-stateDiagram-v2
-    [*] --> PREFLIGHT: Trigger Deployment Runbook
-    PREFLIGHT --> VERIFY: Context, Quotas & Node Memory Verified
-    PREFLIGHT --> ABORTED: Node Headroom < 1.0 GiB or Quota Exceeded
-    
-    VERIFY --> PREVIEW: Cosign Signature & Manifest Hashes Verified
-    VERIFY --> ABORTED: Signature Invalid or Unpinned Tag Detected
-    
-    PREVIEW --> APPLY: Server-Side Dry-Run Clean
-    PREVIEW --> ABORTED: Manifest Schema Drift Detected
-    
-    APPLY --> ROLLOUT: Kustomize Overlay Reconciled
-    ROLLOUT --> SMOKE_TEST: 5 Application Pods in Ready State
-    ROLLOUT --> ROLLBACK: Rollout Timeout (> 180s) or CrashLoop
-    
-    SMOKE_TEST --> ACCEPTED: End-to-End WebSocket Echo Passes
-    SMOKE_TEST --> ROLLBACK: Latency Breach or Drop Rate > 1%
-    
-    ROLLBACK --> RESTORED: Prior Release Restored within 10m
-    ACCEPTED --> [*]
-    RESTORED --> [*]
-```
+The state bootstrap has a local state file initially. Keep it in an access-controlled location and protect it separately. The workload uses an S3 backend with native state locking. Never commit state, credentials or filled tfvars.
 
----
+After creating/reviewing a state bucket, copy and fill the `.example` files in `infra/workload`. These commands prepare a reviewable plan; applying it is a separate operational action:
 
-## 3. Workload Rollout & Connection Drain Mechanics
+~~~bash
+terraform -chdir=infra/workload init -backend-config=backend.hcl
+terraform -chdir=infra/workload fmt -check
+terraform -chdir=infra/workload validate
+terraform -chdir=infra/workload plan -out=workload.tfplan
+~~~
 
-### 3.1 Backend Rolling Update Configuration
-```yaml
-strategy:
-  type: RollingUpdate
-  rollingUpdate:
-    maxSurge: 0
-    maxUnavailable: 1
-```
+Review the plan, account, region and costs before executing an approved apply. The checksum-verified bootstrap installs K3s with Traefik disabled and Secrets encryption enabled. Public ingress is limited to HTTP/HTTPS and restricted SSH; the Kubernetes API, backend and Redis ports are not publicly exposed.
 
-* **Zero Surge Constraint (`maxSurge: 0`):** Prevents the small 2-vCPU / 4-GiB node from scheduling excess containers, guaranteeing that peak memory remains safely below cgroup and node pressure thresholds.
-* **Controlled Replacement (`maxUnavailable: 1`):** Pod 1 is drained and terminated before Pod 2 begins its update.
+There is no static Elastic IP in the current configuration. An instance stop/start can change its public IP; update DNS accordingly. Node-level recovery remains a single-host operation.
 
-### 3.2 Coordinated Connection Drain Timeline
-```mermaid
-sequenceDiagram
-    autonumber
-    participant K8s as Deployment Controller
-    participant TermPod as Backend Pod 1 (Draining)
-    participant Endpoints as K3s Endpoint Controller
-    participant Client as Connected Sockets
-    participant NewPod as Backend Pod 1 (New Version)
+## Operator bootstrap
 
-    K8s->>TermPod: SIGTERM Signal
-    Note over TermPod: Phase 1: Fail Readiness
-    TermPod->>TermPod: Set state = DRAINING (/health returns 503)
-    Endpoints->>Endpoints: Asynchronously remove Pod 1 IP from Service
-    
-    Note over TermPod: Phase 2: Paced Drain (10s Budget)
-    loop Active Sessions (Iterated in batches)
-        TermPod->>Client: Send WebSocket Close Code 1012 (Service Restart)
-        Client->>Client: Exponential backoff with full jitter (0.5s - 15s)
-        Client->>NewPod: Reconnect via backend ClusterIP
-        NewPod-->>Client: Accept & assign new session UUID
-    end
+Use an explicit administrative kubeconfig/context that reaches the private API, for example through an SSH tunnel. Do not open port 6443 publicly. Apply the platform resources, then create the required Secrets:
 
-    Note over TermPod: Phase 3: Cleanup
-    TermPod->>TermPod: Unsubscribe Redis & close publisher pool
-    TermPod->>K8s: Process exits cleanly (Exit Code 0 within 20s grace)
-```
+~~~bash
+kubectl --kubeconfig /secure/admin.yaml --context aws-demo apply -f k8s/platform/namespace.yaml
+kubectl --kubeconfig /secure/admin.yaml --context aws-demo apply -f k8s/platform/deployer-rbac.yaml
+python scripts/bootstrap_secrets.py --kubeconfig /secure/admin.yaml --context aws-demo \
+  --tls-cert /secure/fullchain.pem --tls-key /secure/privkey.pem
+~~~
 
----
+The Secret helper sends values over stdin, preserves an existing Redis pair and refuses a partially missing pair. It updates the TLS Secret. Validate the certificate's hostname, expiry and key correspondence before using it.
 
-## 4. Deterministic Automated Rollback Runbook (`scripts/rollback.sh`)
+Issue a separate deployment identity and bind it to the `chat-deployer` namespace Role. Credential issuance/RoleBinding depends on the operator's identity system and is intentionally separate from application deployment. The deployment identity can apply application resources but cannot directly create Secrets, RBAC or namespaces. Ability to create Pods through Deployments is still sensitive; protect the runner and enforce the restricted Pod Security namespace.
 
-If smoke verification fails or automated PromQL abort triggers activate, execute the emergency rollback script. Target Mean Time to Recovery (MTTR) is **$\le 10\text{ minutes}$**:
+## GitHub Actions
 
-```bash
-#!/usr/bin/env bash
-set -euo pipefail
+`validate.yml` builds the local environment and runs unit, browser, integration, manifest and network checks on PRs and main pushes.
 
-echo "=========================================================="
-echo "EMERGENCY ROLLBACK INITIATED: Restoring prior stable release"
-echo "=========================================================="
+`release.yml` is manual and restricted to main. It runs validation, publishes four Linux amd64 images to GHCR, generates SPDX inventories, blocks fixable HIGH/CRITICAL vulnerabilities and signs each image plus `release.json` using GitHub OIDC/Cosign. It uploads a release artifact.
 
-# 1. Capture Diagnostic Snapshot
-TIMESTAMP=$(date +%Y%m%d%H%M%S)
-SNAPSHOT_DIR="/tmp/k8s-rollback-${TIMESTAMP}"
-mkdir -p "${SNAPSHOT_DIR}"
+`deploy.yml` is manual and runs on a controlled Linux runner labelled `chat-app-deployer`. Configure the protected `aws-demo` environment and these variables:
 
-echo "[1/4] Capturing post-failure diagnostics to ${SNAPSHOT_DIR}..."
-kubectl get pods,services,endpoints -n chat-app -o wide > "${SNAPSHOT_DIR}/cluster-state.txt"
-kubectl logs -n chat-app -l app=backend --tail=500 > "${SNAPSHOT_DIR}/backend-tail.log" || true
+| Variable | Meaning |
+| --- | --- |
+| `DEPLOY_KUBECONFIG` | Absolute path to the runner's restricted kubeconfig |
+| `DEPLOY_CONTEXT` | Exact intended context name |
+| `DEPLOY_STATE_DIR` | Private persistent directory for accepted bundles and deployment journal |
+| `IMAGE_PREFIX` | Exact lowercase prefix, e.g. `ghcr.io/pawankgandhi15/chat_app-` |
 
-# 2. Re-apply Verified Prior Release Bundle
-PREV_RELEASE_BUNDLE="/opt/chat-app/releases/release-manifest-previous.yaml"
-if [[ ! -f "${PREV_RELEASE_BUNDLE}" ]]; then
-  echo "FATAL: Prior release bundle ${PREV_RELEASE_BUNDLE} not found!"
-  exit 1
-fi
+Use trusted branches and protect the runner; do not run untrusted pull-request code on it. The workflow downloads the selected Release artifact. Signature verification independently checks the main-branch release workflow identity and GitHub OIDC issuer. Repository names and workflow paths must match the trust policy if this project is forked or renamed.
 
-echo "[2/4] Applying prior release bundle..."
-kubectl apply -f "${PREV_RELEASE_BUNDLE}"
+Neither workflow has been executed in GitHub yet. Local checks do not prove registry permissions, OIDC configuration, environment protections or remote deployment success.
 
-# 3. Block for Workload Convergence (Timeout: 180s)
-echo "[3/4] Awaiting workload restoration..."
-kubectl rollout status deployment/backend -n chat-app --timeout=180s
-kubectl rollout status deployment/gateway -n chat-app --timeout=180s
+## Bundle verification and deployment
 
-# 4. Execute Synthetic Behavioral Smoke Check
-echo "[4/4] Executing synthetic verification..."
-curl -kfsS https://localhost/health > /dev/null
-echo "SUCCESS: Rollback complete. Prior release verified healthy."
-```
+The signed manifest binds four digest references, rendered manifests, scan reports and SBOMs. Verification checks file hashes, scan/image association, fixable high/critical findings, resource types/namespaces, Pod hardening and service exposure. The checked-in policy is a useful control, not a substitute for a general admission-policy engine.
 
----
+To deploy an already downloaded bundle from the controlled runner:
 
-## 5. Post-Deployment Synthetic Smoke Harness
+~~~bash
+python scripts/deploy.py --bundle /secure/releases/candidate \
+  --kubeconfig /secure/deployer.yaml --context aws-demo \
+  --state-dir /secure/chat-deploy-state \
+  --identity https://github.com/pawankgandhi15/Chat_App/.github/workflows/release.yml@refs/heads/main \
+  --image-prefix ghcr.io/pawankgandhi15/chat_app-
+~~~
 
-Immediately following deployment, an automated test harness verifies end-to-end functionality across the public gateway:
+The script acquires a filesystem lock, verifies/copies the immutable bundle, performs a server dry-run, applies it, waits for the four Deployments and runs a public cross-replica smoke test. It updates `current.json` only after success. GitHub concurrency serializes workflow deployments as well.
 
-| Step | Target Resource | Validation Method | Acceptance Threshold |
-| :--- | :--- | :--- | :--- |
-| **1. TLS Verification** | Public Gateway (`:443`) | OpenSSL handshake test | Valid certificate, TLS 1.2/1.3 negotiated. |
-| **2. Static Assets** | Frontend Service (`/`) | HTTP GET request | HTTP 200 OK, Content-Type `text/html`. |
-| **3. Negative Security** | Internal Endpoints | HTTP GET `/metrics`, `/health` via Gateway | HTTP 403 Forbidden. |
-| **4. Subprotocol Gate** | WebSocket (`/ws/alice`) | `wscat` without subprotocol | Handshake rejected with HTTP 400/403. |
-| **5. Cross-Pod Fan-Out** | WebSocket Mesh | Dual client connection to Pod 1 & Pod 2 | Client A receives Client B's message in $< 250\text{ ms}$. |
+## Failure and rollback
+
+If a candidate fails and a previous accepted bundle exists, the script re-verifies and reapplies that complete bundle, waits for readiness and repeats smoke checks. The candidate deployment still exits nonzero after a successful restoration so the failed release is visible.
+
+A first-ever failed deployment has no previous accepted bundle to restore. Inspect the namespace and correct the candidate. If rollback itself fails, keep the failed journal and investigate; do not mark the candidate accepted.
+
+Backend updates use maxSurge 0 / maxUnavailable 1; existing connections on a terminating Pod receive 1012 and reconnect. Gateway, frontend and Redis use Recreate, so whole-bundle updates can interrupt service. **Zero downtime and a 10-minute recovery target have not been demonstrated.** Secrets, DNS, TLS and infrastructure are not restored by an application bundle.
+
+Old hashed ConfigMaps are retained for rollback. After the retention period, an operator can remove only unreferenced versions after checking both active Pod references and retained bundles. No broad namespace pruning is automated.
+
+## Acceptance and teardown
+
+Run the full off-node load test plus node-memory monitoring, Redis/subscriber failure tests, node reboot, TLS renewal, failed-release restoration and cloud teardown rehearsals. Record evidence before calling the AWS deployment accepted.
+
+Remove workload resources through the reviewed Terraform workflow when the demo ends. S3 state is deliberately protected against routine destroy. Check remaining volumes, snapshots, addresses and registry/runner resources separately. The application does not automatically shut down AWS spending.

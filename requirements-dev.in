@@ -1,0 +1,8 @@
+-r backend/requirements.in
+pytest>=8,<10
+pytest-asyncio>=0.25,<2
+hypothesis>=6,<7
+httpx>=0.28,<1
+PyYAML>=6,<7
+jsonschema>=4,<5
+playwright>=1.50,<2

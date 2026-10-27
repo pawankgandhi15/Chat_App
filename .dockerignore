@@ -1,0 +1,13 @@
+.git
+.venv
+.local
+artifacts
+__pycache__
+**/__pycache__
+**/*.pyc
+**/.terraform
+.pytest_cache
+.hypothesis
+docs
+*.tfstate*
+.env*

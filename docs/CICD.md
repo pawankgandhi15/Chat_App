@@ -1,5 +1,7 @@
 # Continuous Integration & Continuous Delivery (CI/CD)
 
+> Design reference: the runnable implementation and measured results are recorded in [Implementation status](IMPLEMENTATION_STATUS.md). Use [Development](DEVELOPMENT.md), [Configuration](CONFIGURATION.md) and [Deployment](DEPLOYMENT.md) for current commands and defaults. The illustrative blueprints below are not the deployed source files.
+
 **Design Revision 5 — 2026-10-26. Status: Production Engineering Specification.** This document provides the architectural specifications, workflow topologies, cryptographic supply-chain security pipelines, and automated quality gates implemented in GitHub Actions for Chat App.
 
 ---

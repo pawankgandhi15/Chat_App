@@ -1,106 +1,105 @@
-# Chat App
+# Chat App · Common Room
 
-**Real-time messaging with FastAPI, Redis and Kubernetes — designed for deployment on AWS.**
+**A real-time chat application built with FastAPI, Redis and Kubernetes.**
 
-A documented engineering project exploring WebSocket communication across backend replicas, an accessible browser experience, and automated infrastructure and delivery on a single EC2 host.
+Open one shared room, choose a temporary display name and exchange live text messages across two backend replicas. The responsive interface preserves unsent drafts through reconnects and renders messages safely as text.
 
-[Architecture](docs/ARCHITECTURE.md) · [Frontend & UI/UX](docs/FRONTEND.md) · [Backend](docs/BACKEND.md) · [Implementation plan](docs/IMPLEMENTATION_PLAN.md) · [AWS requirements](docs/AWS_FREE_TIER_REQUIREMENTS.md)
+[Run locally](docs/DEVELOPMENT.md) · [Implementation evidence](docs/IMPLEMENTATION_STATUS.md) · [API contract](docs/API_SPECIFICATION.md) · [System design](docs/design/README.md)
 
-## AWS Architecture Diagram
+## Run locally
 
-![Planned AWS K3s architecture: one EC2 Kubernetes node with a gateway, frontend, two backend Pods and Redis; private Terraform state in S3.](docs/images/aws-k3s-architecture.png)
+Requires Python 3.12, Node.js 24, Docker with Linux containers, k3d 5.9.0 and kubectl 1.37.x. From the repository root in PowerShell:
 
-*Planned single-node K3s deployment in `ap-south-1` (Mumbai). [Open the full-size diagram](docs/images/aws-k3s-architecture.png).*
+~~~powershell
+py -3.12 -m venv .venv
+.venv\Scripts\python.exe -m pip install --require-hashes -r requirements-dev.lock
+.venv\Scripts\python.exe scripts/local.py up
+~~~
 
-## Project Status
+Open **http://localhost:8080** in two tabs. No AWS account is needed. The launcher builds the images, creates the local cluster and waits for all services.
 
-**Current phase: documentation and design.** This repository contains requirements, technical specifications and implementation plans. Application source code, Kubernetes manifests, container images, Terraform resources and CI/CD workflows have yet to be implemented.
+For Linux/macOS setup, tests, troubleshooting and cleanup, see [Development](docs/DEVELOPMENT.md). To stop the local environment:
 
-| Area | Status |
-| --- | --- |
-| Product requirements, architecture and API contract | Documented; implementation review pending |
-| Frontend, UI/UX and backend specifications | Documented |
-| Infrastructure, security and delivery plans | Documented |
-| Application and automation | Planned |
-| Runtime tests, performance measurements and deployment | Pending implementation |
+~~~powershell
+.venv\Scripts\python.exe scripts/local.py down
+~~~
 
-Code blocks in the guides are proposed examples. There is no runnable application or deployed demo yet; performance and reliability objectives require test evidence.
+## What is implemented
 
-## Overview
+- **Live messaging:** session-first `chat.v1` WebSockets and Redis Pub/Sub fanout across backend replicas.
+- **Responsive interface:** keyboard controls, connection feedback, safe text rendering and mobile layout.
+- **Recovery:** bounded retries, retained unsent drafts and no automatic message resending.
+- **Resource controls:** connection/rate limits, bounded queues, send deadlines and slow-client isolation.
+- **Kubernetes:** four Deployments, five application Pods, readiness/liveness probes and enforced network isolation.
+- **Delivery tooling:** Terraform, validation workflows, scanned/signed release bundles and previous-bundle restoration.
 
-The planned application provides one anonymous global chat channel. A visitor receives a temporary display name, connects through a WebSocket and exchanges text messages with other connected visitors. Redis Pub/Sub distributes events between two backend replicas so clients can communicate regardless of which replica serves their connection.
-
-The project brings application development and operations into one workflow: define the protocol, implement and test the services in containers, provision infrastructure, publish verified images, and rehearse deployment and recovery.
-
-### Planned Capabilities
-
-- **Live messaging:** A versioned `chat.v1` WebSocket protocol, structured server events and messaging across backend replicas.
-- **Accessible interface:** Responsive layout, keyboard interaction, safe text rendering and clear connection states.
-- **Connection recovery:** Bounded retries, preserved unsent drafts and manual reconnection after retry exhaustion.
-- **Controlled resource use:** Connection limits, rate limits, bounded delivery queues and slow-client isolation.
-- **Operational visibility:** Dependency-aware readiness, private liveness/metrics endpoints and structured logs.
-- **Repeatable delivery:** Container images selected by digest, Terraform infrastructure, CI checks and verified rollback procedures.
+The local application is implemented and tested. AWS provisioning, GitHub release execution and cloud acceptance remain pending. Detailed results and limits are recorded in [Implementation status](docs/IMPLEMENTATION_STATUS.md).
 
 ## Architecture
 
-The deployment target is **five steady-state application Pods across four Kubernetes Deployments** on one EC2 K3s node, plus platform Pods. Local development uses k3d. The backend Deployment runs two replicas.
+![AWS K3s deployment design: one EC2 node with gateway, frontend, two backend Pods and Redis; private Terraform state in S3.](docs/images/aws-k3s-architecture.png)
 
-1. Nginx serves as the public entry point and routes static requests and WebSocket connections.
-2. Each backend validates incoming messages and publishes a server-generated event to Redis.
-3. Both backends consume the event and deliver it through bounded queues to their connected clients.
+*AWS deployment design; cloud resources have not been provisioned. [View full-size](docs/images/aws-k3s-architecture.png).*
 
-K3s ServiceLB exposes gateway ports 80/443 on the node; no managed AWS load balancer is required. Default-deny NetworkPolicies and explicit allowances isolate Redis from the gateway and frontend. Terraform stores infrastructure state and lockfiles in S3, outside the chat message path. Backend replication demonstrates distributed messaging within one host and does not provide host-level high availability.
+~~~mermaid
+flowchart LR
+    Browser -->|HTTP / WebSocket| Gateway[Nginx gateway]
+    Gateway --> Frontend[Static frontend]
+    Gateway --> BackendA[FastAPI replica A]
+    Gateway --> BackendB[FastAPI replica B]
+    BackendA <-->|Pub/Sub| Redis
+    BackendB <-->|Pub/Sub| Redis
+~~~
 
-See the [architecture guide](docs/ARCHITECTURE.md) for networking, lifecycle and failure behavior, and the [API specification](docs/API_SPECIFICATION.md) for the wire contract.
+A backend validates each message, assigns its event ID and publishes it once. Both backends consume the event and deliver it to their connected clients. Each socket has an independent bounded writer queue.
 
-## Planned Technology Stack
+Local development uses k3d. The AWS target uses K3s/containerd on one EC2 host, with K3s ServiceLB exposing only the gateway. Redis and backend diagnostics stay private. Two backend Pods demonstrate distributed messaging; they do not provide host-level high availability.
 
-| Layer | Technologies | Purpose |
-| --- | --- | --- |
-| Browser interface | HTML, CSS, native JavaScript | Responsive chat UI and browser connection state |
-| Real-time transport | WebSockets, `chat.v1` | Persistent browser-to-backend communication |
-| Backend | Python, FastAPI, Uvicorn, Pydantic | Async sessions, validation and event handling |
-| Messaging | Redis Pub/Sub, `redis.asyncio` | Live event distribution across replicas |
-| Web serving | Nginx | Static assets, TLS termination and reverse proxying |
-| Containers and orchestration | Docker/OCI, k3d, K3s/containerd, Kustomize | Off-host image builds, local Kubernetes and single-node AWS deployment |
-| Infrastructure | AWS EC2, EBS, VPC, S3, Terraform | Compute, networking, storage and infrastructure state |
-| Delivery | GitHub Actions, OCI image registry | Automated checks, builds and release delivery |
-| Quality and security | pytest, Hypothesis, Trivy, Cosign | Behavior testing, image scanning and artifact verification |
+## Technology stack
 
-The [technology guide](docs/TECHNOLOGIES.md) records design choices and candidate versions. Dependency compatibility, security updates and the registry configuration must be reconciled and locked during implementation.
-
-## Explore the Project
-
-Clone the documentation repository:
-
-```bash
-git clone https://github.com/pawankgandhi15/Chat_App.git
-cd Chat_App
-```
-
-Choose a starting point:
-
-| Your goal | Read first |
+| Layer | Implementation |
 | --- | --- |
-| Understand the product and scope | [Requirements](docs/REQUIREMENTS.md) → [Architecture](docs/ARCHITECTURE.md) |
-| Study HLD/LLD or plan future growth | [System design handbook](docs/design/README.md) → [Architecture evolution](docs/design/ARCHITECTURE_EVOLUTION.md) |
-| Design the interface | [Frontend & UI/UX](docs/FRONTEND.md) → [API specification](docs/API_SPECIFICATION.md) |
-| Build the messaging services | [Backend](docs/BACKEND.md) → [Configuration](docs/CONFIGURATION.md) |
-| Plan implementation work | [Implementation plan](docs/IMPLEMENTATION_PLAN.md) → [Development guide](docs/DEVELOPMENT.md) |
-| Prepare an AWS environment | [AWS Free Tier requirements](docs/AWS_FREE_TIER_REQUIREMENTS.md) → [Infrastructure](docs/INFRASTRUCTURE.md) |
+| Interface | HTML, CSS, native JavaScript modules |
+| API and transport | Python 3.12, FastAPI, Uvicorn, Pydantic, WebSockets |
+| Messaging | Redis Pub/Sub and redis.asyncio |
+| Web serving | Nginx static server and reverse proxy |
+| Runtime | Docker/OCI, k3d, K3s, containerd, Kustomize |
+| Infrastructure code | Terraform for EC2, EBS, VPC and S3 state |
+| Delivery | GitHub Actions, GHCR, Trivy, Cosign |
+| Verification | pytest, Hypothesis, Node test runner, Playwright |
 
-The repository currently contains:
+Python dependencies are hash-locked; container bases are pinned by digest. See [Configuration](docs/CONFIGURATION.md) for actual settings and [Technologies](docs/TECHNOLOGIES.md) for design rationale.
 
-```text
-Chat_App/
-├── README.md                       # Project overview and navigation
-├── CONTRIBUTING.md                 # Contribution and review guidance
-├── CHANGELOG.md                    # Documentation change history
-├── docs/                           # Product and engineering specifications
-└── gemini-code-1792827209365.md      # Original planning discussion
-```
+## Verification
 
-The future source layout is described in [Project Structure](docs/PROJECT_STRUCTURE.md). Setup and deployment commands in the guides become usable after their referenced source files and prerequisites exist.
+Local checks passed: **26 Python unit tests, 6 JavaScript tests, 9 real-container integration tests and the Chromium desktop/mobile flow**. Public smoke tests, Kubernetes network checks, both Kustomize overlays and both Terraform roots also passed their applicable checks.
+
+A short local run with **25 clients**, **5 aggregate messages/second** and **512-byte payloads** delivered all **7,500 expected events** during 60 seconds, with no duplicates and approximately **16 ms p95/p99** client-observed latency. This is local evidence, not a measured AWS capacity claim. The longer cloud test and node-memory target remain pending.
+
+~~~powershell
+.venv\Scripts\python.exe -m pytest tests/unit -q
+node --test tests/frontend/*.test.js
+.venv\Scripts\python.exe scripts/smoke.py
+~~~
+
+See [Development](docs/DEVELOPMENT.md) for the complete test commands and [Implementation status](docs/IMPLEMENTATION_STATUS.md) for evidence boundaries.
+
+## Repository layout
+
+~~~text
+backend/             FastAPI application and locked runtime dependencies
+frontend/            Browser interface, modules and static server
+gateway/             Local/HTTPS Nginx routing
+redis/               Digest-pinned Redis release image
+k8s/                 Base workloads, policies, platform resources and overlays
+platform/k3d/        Disposable local cluster definition
+infra/               Separate Terraform state and workload roots
+scripts/             Local setup, checks, load, release and deployment tools
+schemas/             Event and release contracts
+tests/               Unit, JavaScript, integration and browser tests
+.github/workflows/   Validation, manual release and manual deployment
+docs/                Requirements, operational guides and HLD/LLD handbook
+~~~
 
 ## Documentation
 
@@ -115,7 +114,7 @@ The future source layout is described in [Project Structure](docs/PROJECT_STRUCT
 | [Backend](docs/BACKEND.md) | Modules, messaging, validation, recovery and service engineering |
 | [API Specification](docs/API_SPECIFICATION.md) | Routes, event schemas, input rules and close codes |
 | [Technologies](docs/TECHNOLOGIES.md) | Stack choices, compatibility considerations and candidate versions |
-| [Project Structure](docs/PROJECT_STRUCTURE.md) | Planned files and module responsibilities |
+| [Project Structure](docs/PROJECT_STRUCTURE.md) | Module responsibilities and future layout proposals |
 | [Decisions and Risks](docs/DECISIONS_AND_RISKS.md) | Architectural decisions, trade-offs and implementation risks |
 
 ### Development and Quality
@@ -123,7 +122,7 @@ The future source layout is described in [Project Structure](docs/PROJECT_STRUCT
 | Guide | Contents |
 | --- | --- |
 | [Implementation Plan](docs/IMPLEMENTATION_PLAN.md) | Ordered milestones and verification gates |
-| [Development](docs/DEVELOPMENT.md) | Future local setup, container workflows and debugging |
+| [Development](docs/DEVELOPMENT.md) | Working local setup, container workflows and debugging |
 | [Configuration](docs/CONFIGURATION.md) | Environment settings, defaults and configuration examples |
 | [Testing](docs/TESTING.md) | Unit, contract, integration, load and failure testing |
 | [Security](docs/SECURITY.md) | Threat model, access boundaries, secret handling and release controls |
@@ -143,30 +142,16 @@ The future source layout is described in [Project Structure](docs/PROJECT_STRUCT
 
 For change history, see [CHANGELOG.md](CHANGELOG.md). The [original planning discussion](gemini-code-1792827209365.md) provides historical context. When examples or summaries differ, requirements own scope and targets, the API specification owns the wire contract, and configuration owns defaults; reconcile conflicts before implementation.
 
-## Implementation Roadmap
+## Scope and deployment
 
-| Phase | Deliverable | Completion evidence |
-| --- | --- | --- |
-| 1. Confirm contracts | Consistent schemas, configuration and dependency choices | Reviewed contracts and resolved implementation blockers |
-| 2. Build the application | Backend messaging and accessible frontend | Unit, contract and browser checks |
-| 3. Integrate containers | Four Deployments, five application Pods and enforced policies | Cross-replica messaging and failure tests |
-| 4. Prepare infrastructure and delivery | Terraform and CI/CD workflows | Reviewed plans, verified artifacts and deployment checks |
-| 5. Validate operations | Recovery, capacity and rollback procedures | Recorded measurements and a successful rollback rehearsal |
+This is an anonymous, ephemeral global chat. Accounts, private conversations, attachments, durable history and read receipts are outside the current scope. Display names are not verified identities. Messages missed while disconnected cannot be recovered.
 
-All phases remain planned. The [implementation plan](docs/IMPLEMENTATION_PLAN.md) contains the detailed tasks and acceptance gates.
+The AWS Terraform defaults target a single 2-vCPU/4-GiB candidate in Mumbai. Review account eligibility, actual prices, credits and teardown arrangements before provisioning. K3s avoids a managed Kubernetes control plane, but EC2 and related resources still consume credits or money.
 
-[Kubernetes is the primary deployment path](docs/KUBERNETES.md). Validate locally with k3d before spending AWS credits on K3s. The previous Compose proposal and older architecture images are historical.
-
-## Scope and Validation
-
-The initial scope is text messaging in one anonymous global channel. Accounts, private conversations, attachments, durable history, read receipts and multi-host orchestration are deferred. Messages missed during a disconnection are not replayed by the planned Pub/Sub design.
-
-The requirements define an initial experiment with **25 concurrent clients and 5 aggregate messages per second**, followed by latency, delivery, resource and recovery checks. These are validation targets, not measured capacity. See [Requirements](docs/REQUIREMENTS.md) and [Testing](docs/TESTING.md) for the full conditions.
-
-AWS deployment targets a measured **2-vCPU / 4-GiB candidate**, evaluating `c7i-flex.large` in Mumbai (`ap-south-1`). Actual eligibility, credits, resource prices and runtime usage must be checked for the account; K3s avoids the EKS cluster fee, but EC2 and related services still consume credits. Plan against the actual eligible balance, with a proposed $20 reserve from $100; the project does not guarantee zero cost. Use the [AWS requirements guide](docs/AWS_FREE_TIER_REQUIREMENTS.md) before provisioning.
+[Deployment](docs/DEPLOYMENT.md) describes the concrete provisioning and signed-release workflow. [AWS requirements](docs/AWS_FREE_TIER_REQUIREMENTS.md) provides the account/cost worksheet. No infrastructure is created by the local startup command.
 
 ## Contributing
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) before making changes. Documentation contributions should keep contracts consistent, distinguish proposed behavior from verified results, and update related guides when scope or defaults change.
+Read [CONTRIBUTING.md](CONTRIBUTING.md). Keep implementation, wire contracts and documentation aligned, add checks for meaningful behavior changes, and distinguish measurements from targets.
 
-Report issues with the affected document, expected behavior and a concise reproduction or example. Implementation contributions should identify the relevant acceptance criteria and include evidence from the applicable checks.
+See [CHANGELOG.md](CHANGELOG.md) for repository changes. The [original planning discussion](gemini-code-1792827209365.md) and unimplemented expansion plans remain historical/design context.

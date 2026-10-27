@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "release_id",
+    "source_commit",
+    "created_at",
+    "origin",
+    "target_architecture",
+    "images",
+    "files",
+    "secrets_required"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "release_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "created_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "origin": {
+      "type": "string"
+    },
+    "target_architecture": {
+      "const": "linux/amd64"
+    },
+    "images": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "backend",
+        "frontend",
+        "gateway",
+        "redis"
+      ],
+      "properties": {
+        "backend": {
+          "type": "string",
+          "pattern": "^[a-z0-9./:_-]+@sha256:[0-9a-f]{64}$"
+        },
+        "frontend": {
+          "type": "string",
+          "pattern": "^[a-z0-9./:_-]+@sha256:[0-9a-f]{64}$"
+        },
+        "gateway": {
+          "type": "string",
+          "pattern": "^[a-z0-9./:_-]+@sha256:[0-9a-f]{64}$"
+        },
+        "redis": {
+          "type": "string",
+          "pattern": "^[a-z0-9./:_-]+@sha256:[0-9a-f]{64}$"
+        }
+      }
+    },
+    "files": {
+      "type": "object",
+      "required": [
+        "manifests.yaml",
+        "sbom-backend.json",
+        "scan-backend.json",
+        "sbom-frontend.json",
+        "scan-frontend.json",
+        "sbom-gateway.json",
+        "scan-gateway.json",
+        "sbom-redis.json",
+        "scan-redis.json"
+      ],
+      "additionalProperties": {
+        "type": "string",
+        "pattern": "^[0-9a-f]{64}$"
+      }
+    },
+    "secrets_required": {
+      "const": [
+        "redis-url",
+        "redis-auth",
+        "gateway-tls"
+      ]
+    }
+  }
+}

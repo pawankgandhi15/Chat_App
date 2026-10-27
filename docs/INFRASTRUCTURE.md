@@ -1,5 +1,7 @@
 # AWS Infrastructure as Code (Terraform) & Host Bootstrap
 
+> Design reference: the runnable implementation and measured results are recorded in [Implementation status](IMPLEMENTATION_STATUS.md). Use [Development](DEVELOPMENT.md), [Configuration](CONFIGURATION.md) and [Deployment](DEPLOYMENT.md) for current commands and defaults. The illustrative blueprints below are not the deployed source files.
+
 **Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document provides the declarative Terraform 1.10+ HCL specifications, AWS VPC architecture, security group rules, IMDSv2 policies, and EC2 K3s host bootstrap scripts for Chat App.
 
 ---

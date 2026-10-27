@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+namespace: chat-app
+resources:
+  - workloads.yaml
+  - services.yaml
+  - network-policies.yaml
+configMapGenerator:
+  - name: backend-config
+    literals:
+      - APP_ENV=local
+      - RELEASE_ID=development
+      - ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
+      - CHANNEL_NAME=global_chat_channel
+      - REDIS_URL_FILE=/etc/secrets/redis/url
+  - name: redis-config
+    files:
+      - redis.conf

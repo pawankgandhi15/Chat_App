@@ -1,5 +1,7 @@
 # Planned Project Structure & Repository Layout
 
+> Design reference: the runnable implementation and measured results are recorded in [Implementation status](IMPLEMENTATION_STATUS.md). Use [Development](DEVELOPMENT.md), [Configuration](CONFIGURATION.md) and [Deployment](DEPLOYMENT.md) for current commands and defaults. The illustrative blueprints below are not the deployed source files.
+
 **Design Revision 5 — 2026-10-26. Status: Architecture Layout Specification.** This document defines the directory hierarchy, file placement rules, modular boundaries, and Git governance for all components of Chat App.
 
 ---
@@ -20,7 +22,7 @@ Chat_App/
 │   │   ├── main.py                       # FastAPI lifespan, router mounting, signal handlers
 │   │   ├── settings.py                   # Immutable Pydantic V2 settings loader
 │   │   ├── protocol.py                   # Pydantic wire schemas, UUID/timestamp generation
-│   │   ├── validation.py                 # Unicode NFC, regex, code point counting
+│   │   ├── validation.py                 # Exact newline/ASCII trim, regex, code point counting; no NFC/NFKC
 │   │   ├── sessions.py                   # Active session registry & delivery queue manager
 │   │   ├── limits.py                     # Monotonic token-bucket rate limiters
 │   │   ├── broker.py                     # Redis subscriber supervision & publisher pool

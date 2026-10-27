@@ -4,6 +4,14 @@ This file records actual repository changes. Planned application features remain
 
 ## Unreleased
 
+### Runnable application and deployment tooling — 2026-10-27
+
+- Implemented the FastAPI/Redis chat backend, responsive browser UI and Nginx gateway with the chat.v1 contract, bounded queues/rates, reconnect behavior, dependency readiness and signal draining.
+- Added container builds, hash-locked dependencies, k3d/K3s manifests, restricted containers, paired Redis Secrets and tested network isolation.
+- Added Terraform roots, validation/release/deployment workflows, signed bundle checks, SBOM/scan gates and previous-release restoration tooling.
+- Added unit, JavaScript, real-container, browser, smoke and load checks. Local 25-client short-run results are recorded in `docs/IMPLEMENTATION_STATUS.md`.
+- Updated the README and operational guides with working commands. AWS provisioning, remote release execution and cloud acceptance remain pending.
+
 ### Expanded architecture templates — 2026-10-26
 
 - Expanded the change proposal with evidence, scope/invariants, HLD/LLD interfaces, compatibility matrices, capacity, failure analysis, security, costs, observability, migration and recovery worksheets.

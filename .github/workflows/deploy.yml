@@ -1,0 +1,45 @@
+name: Deploy verified release
+on:
+  workflow_dispatch:
+    inputs:
+      release_run_id:
+        description: Successful Release workflow run ID
+        required: true
+        type: string
+      source_commit:
+        description: Full source commit identifying the release artifact
+        required: true
+        type: string
+permissions:
+  contents: read
+  actions: read
+concurrency:
+  group: aws-demo-deployment
+  cancel-in-progress: false
+jobs:
+  deploy:
+    if: github.ref == 'refs/heads/main'
+    # Controlled runner: preinstall Python dependencies, kubectl and cosign.
+    runs-on: [self-hosted, linux, chat-app-deployer]
+    environment: aws-demo
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: release-${{ inputs.source_commit }}
+          run-id: ${{ inputs.release_run_id }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          path: artifacts/deploy
+      - name: Verify, deploy and restore on failure
+        env:
+          DEPLOY_KUBECONFIG: ${{ vars.DEPLOY_KUBECONFIG }}
+          DEPLOY_CONTEXT: ${{ vars.DEPLOY_CONTEXT }}
+          DEPLOY_STATE_DIR: ${{ vars.DEPLOY_STATE_DIR }}
+          TRUSTED_IDENTITY: https://github.com/${{ github.repository }}/.github/workflows/release.yml@refs/heads/main
+          IMAGE_PREFIX: ${{ vars.IMAGE_PREFIX }}
+        run: |
+          python scripts/deploy.py --bundle artifacts/deploy \
+            --kubeconfig "$DEPLOY_KUBECONFIG" --context "$DEPLOY_CONTEXT" \
+            --state-dir "$DEPLOY_STATE_DIR" --identity "$TRUSTED_IDENTITY" \
+            --image-prefix "$IMAGE_PREFIX"

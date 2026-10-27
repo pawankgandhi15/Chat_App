@@ -1,0 +1,35 @@
+#!/bin/bash
+set -euo pipefail
+umask 077
+install -d -m 700 /etc/rancher/k3s
+curl --fail --location --retry 3 "https://github.com/k3s-io/k3s/releases/download/${k3s_version}/k3s" -o /usr/local/bin/k3s
+echo "${k3s_sha256}  /usr/local/bin/k3s" | sha256sum --check -
+chmod 755 /usr/local/bin/k3s
+cat > /etc/rancher/k3s/config.yaml <<'CONFIG'
+disable:
+  - traefik
+secrets-encryption: true
+write-kubeconfig-mode: "0600"
+kubelet-arg:
+  - "container-log-max-size=10Mi"
+  - "container-log-max-files=3"
+CONFIG
+cat > /etc/systemd/system/k3s.service <<'SERVICE'
+[Unit]
+Description=K3s server
+Wants=network-online.target
+After=network-online.target
+[Service]
+Type=notify
+ExecStart=/usr/local/bin/k3s server
+KillMode=process
+Delegate=yes
+LimitNOFILE=1048576
+TasksMax=infinity
+Restart=always
+RestartSec=5
+[Install]
+WantedBy=multi-user.target
+SERVICE
+systemctl daemon-reload
+systemctl enable --now k3s

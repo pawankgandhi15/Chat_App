@@ -1,238 +1,86 @@
-# Configuration Reference & Environment Contract
+# Configuration reference
 
-**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document defines the configuration contracts, environment variables, secret mounts, and runtime validation rules for all Chat App components.
+This reference describes the implemented code as of 2026-10-27. [Settings](../backend/app/settings.py), [Kubernetes defaults](../k8s/base/kustomization.yaml) and the [API specification](API_SPECIFICATION.md) are the relevant implementation contracts. Settings are read once at startup and validated before the server starts.
 
----
+## Backend settings
 
-## 1. Backend Application Settings Contract
+| Environment variable | Default | Bounds / behavior |
+| --- | --- | --- |
+| `APP_ENV` | `local` | `local`, `test` or `public` |
+| `RELEASE_ID` | `development` | 1–64 characters; public mode rejects `development` |
+| `ALLOWED_ORIGINS` | `http://localhost:8080,http://127.0.0.1:8080` | Comma-separated exact HTTP(S) origins, without paths, wildcards or credentials; public mode requires HTTPS |
+| `CHANNEL_NAME` | `global_chat_channel` | Lowercase letters, digits, underscores/hyphens; 3–64 characters; ACL must match |
+| `REDIS_URL` | Unset | Local/test convenience; secret value excluded from settings representation |
+| `REDIS_URL_FILE` | Unset | UTF-8 file containing the connection URI; required in public mode |
+| `MAX_CONNECTIONS_PER_REPLICA` | `64` | 10–256 |
+| `RATE_MESSAGES_PER_SECOND` | `2` | 0.5–10 per socket |
+| `RATE_BURST` | `5` | 1–20 |
+| `PUBLISH_RATE_PER_SECOND` | `20` | 5–100 per replica |
+| `PUBLISH_BURST` | `40` | 10–200 |
+| `OUTBOUND_QUEUE_EVENTS` | `32` | 8–128 per socket |
+| `OUTBOUND_QUEUE_BYTES` | `262144` | 65536–1048576 serialized UTF-8 bytes per socket |
+| `SEND_TIMEOUT_SECONDS` | `2` | 0.5–10 |
+| `REDIS_COMMAND_TIMEOUT_SECONDS` | `1` | 0.2–5 |
+| `SUBSCRIBER_HEARTBEAT_SECONDS` | `5` | 1–15 |
+| `SUBSCRIBER_STALE_SECONDS` | `10` | 3–30; must exceed heartbeat interval |
+| `SHUTDOWN_DRAIN_SECONDS` | `10` | 2–15; keep below Pod termination grace of 20 seconds |
 
-Configuration is managed via Pydantic V2 `BaseSettings`, validated strictly during application initialization. If any configuration variable fails regex validation, bounds checking, or file existence validation, **the application process terminates immediately with exit code 1**.
+Set exactly one Redis source. Neither silently overrides the other. The URI must use `redis://` or `rediss://`, database zero, and no query or fragment. Public mode also requires a username and password. Kubernetes mounts `redis-url` at `/etc/secrets/redis/url`. The application does not automatically load a `.env` file.
 
-```python
-# Conceptual Pydantic V2 Settings Model
-from pydantic_settings import BaseSettings, SettingsConfigDict
-from pydantic import Field, AnyUrl, FilePath, field_validator
-from typing import List, Optional
+The settings model ignores unrelated environment variables. Invalid configured values stop startup with a generic error so input values and credentials are not printed.
 
-class Settings(BaseSettings):
-    app_env: str = Field(default="local", pattern=r"^(local|test|public)$")
-    release_id: str = Field(default="development", min_length=1, max_length=64)
-    allowed_origins: List[str] = Field(default=["http://localhost:8080", "http://127.0.0.1:8080"])
-    channel_name: str = Field(default="global_chat_channel", pattern=r"^[a-z0-9_-]{3,64}$")
-    redis_url: Optional[AnyUrl] = None
-    redis_url_file: Optional[FilePath] = None
-    max_connections_per_replica: int = Field(default=64, ge=10, le=256)
-    rate_messages_per_second: float = Field(default=2.0, ge=0.5, le=10.0)
-    rate_burst: int = Field(default=5, ge=1, le=20)
-    publish_rate_per_second: float = Field(default=20.0, ge=5.0, le=100.0)
-    publish_burst: int = Field(default=40, ge=10, le=200)
-    outbound_queue_events: int = Field(default=32, ge=8, le=128)
-    outbound_queue_bytes: int = Field(default=262144, ge=65536, le=1048576)
-    send_timeout_seconds: float = Field(default=2.0, ge=0.5, le=10.0)
-    redis_command_timeout_seconds: float = Field(default=1.0, ge=0.2, le=5.0)
-    subscriber_heartbeat_seconds: float = Field(default=5.0, ge=1.0, le=15.0)
-    subscriber_stale_seconds: float = Field(default=10.0, ge=3.0, le=30.0)
-    shutdown_drain_seconds: float = Field(default=10.0, ge=2.0, le=15.0)
+## Fixed wire and transport rules
 
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="forbid")
-```
+- Username: ASCII `[A-Za-z0-9_-]{1,32}`.
+- WebSocket subprotocol: `chat.v1`, required at handshake.
+- Maximum reassembled frame payload: 16,384 bytes, enforced by the canonical Uvicorn entrypoint.
+- Maximum normalized text: 2,000 Unicode code points.
+- Convert CRLF/lone CR to LF; trim ASCII space, tab, CR and LF only. No NFC/NFKC conversion.
+- C0 controls other than tab/LF and DEL are rejected. Empty normalized text is ignored but consumes the socket rate budget.
+- Compression is disabled; transport receive queue is four messages; ping interval/timeout are 20 seconds.
+- Publication is never retried after an ambiguous failure. Redis Pub/Sub cannot replay lost messages.
 
-### Comprehensive Settings Reference
+## Secrets and Redis
 
-| Variable Name | Consumer | Type | Default | Allowed Range / Pattern | Secret? | Mutability |
-| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
-| `APP_ENV` | Backend / Scripts | String | `local` | `local`, `test`, `public` | No | Startup |
-| `RELEASE_ID` | Backend / Telemetry | String | `development` | Alphanumeric commit/date string | No | Startup |
-| `ALLOWED_ORIGINS` | Backend Handshake | List[String] | `http://localhost:8080` | Comma-separated full URIs (scheme+host+port) | No | Startup |
-| `CHANNEL_NAME` | Backend / Broker | String | `global_chat_channel` | `^[a-z0-9_-]{3,64}$` | No | Startup |
-| `REDIS_URL` | Backend (Local dev) | AnyUrl | `None` | Valid Redis URI (`redis://user:pass@host:port/0`) | Sensitive | Startup |
-| `REDIS_URL_FILE` | Backend (Kubernetes) | FilePath | `None` | Path to mounted secret file (`/etc/secrets/redis/url`) | File Secret | Startup |
-| `MAX_CONNECTIONS_PER_REPLICA` | Backend Admission | Integer | `64` | `10` to `256` | No | Startup |
-| `RATE_MESSAGES_PER_SECOND` | Socket Limiter | Float | `2.0` | `0.5` to `10.0` (Token bucket refill rate) | No | Startup |
-| `RATE_BURST` | Socket Limiter | Integer | `5` | `1` to `20` (Token bucket burst capacity) | No | Startup |
-| `PUBLISH_RATE_PER_SECOND` | Replica Limiter | Float | `20.0` | `5.0` to `100.0` (Replica shared budget) | No | Startup |
-| `PUBLISH_BURST` | Replica Limiter | Integer | `40` | `10` to `200` (Replica burst capacity) | No | Startup |
-| `OUTBOUND_QUEUE_EVENTS` | Session Queue | Integer | `32` | `8` to `128` (Per-socket queued events) | No | Startup |
-| `OUTBOUND_QUEUE_BYTES` | Session Queue | Integer | `262144` | `65536` to `1048576` (256 KiB default) | No | Startup |
-| `SEND_TIMEOUT_SECONDS` | Writer Task | Float | `2.0` | `0.5` to `10.0` | No | Startup |
-| `REDIS_COMMAND_TIMEOUT_SECONDS`| Broker Pool | Float | `1.0` | `0.2` to `5.0` | No | Startup |
-| `SUBSCRIBER_HEARTBEAT_SECONDS` | Broker Watchdog | Float | `5.0` | `1.0` to `15.0` | No | Startup |
-| `SUBSCRIBER_STALE_SECONDS` | Broker Watchdog | Float | `10.0` | `3.0` to `30.0` (Must be > heartbeat interval) | No | Startup |
-| `SHUTDOWN_DRAIN_SECONDS` | Lifecycle Manager | Float | `10.0` | `2.0` to `15.0` (Must be < Pod termination grace) | No | Startup |
+| Secret | Key | Consumer |
+| --- | --- | --- |
+| `redis-url` | `url` | Backend |
+| `redis-auth` | `users.acl` | Redis |
+| `gateway-tls` | `tls.crt`, `tls.key` | AWS gateway |
 
----
+`scripts/local.py up` generates a random local Redis password and stores only its SHA-256 hash in the ACL. `scripts/bootstrap_secrets.py` provides the separate operator path for a selected AWS cluster.
 
-## 2. Dual Secret Resolution Mechanics
+Redis permits the application user only `PING`, `PUBLISH`, `SUBSCRIBE` and `UNSUBSCRIBE` on `global_chat_channel`. The default user is disabled. The client explicitly uses RESP2 and disables library metadata commands to stay within that ACL.
 
-To adhere to enterprise security guidelines, **credentials must never appear in environment variables or process table listings** (`/proc/$PID/environ`).
+Redis persistence is off. Its configured `maxmemory` is 48 MiB and its Pub/Sub output buffer hard/soft limits are **4 MiB / 1 MiB for 10 seconds**. These are lower than the earlier design examples to fit the 128 MiB container limit. Pub/Sub output buffers require their own limits; `maxmemory` alone is insufficient.
 
-```mermaid
-flowchart TD
-    Start["Application Startup: Resolve Credentials"] --> CheckEnv{"Is REDIS_URL_FILE defined?"}
-    
-    CheckEnv -->|Yes: Production Mode| ReadFile["Read Secret File from Mounted Volume<br/>(e.g., /etc/secrets/redis/url)"]
-    ReadFile --> ValidateFile{"File exists, readable, non-empty,<br/>and contains valid redis:// URI?"}
-    ValidateFile -->|Yes| ParseSecret["Parse Redis Credentials into Memory"]
-    ValidateFile -->|No| FatalFile["Fatal Error: Corrupt or missing Secret File<br/>Exit Code 1"]
+## Kubernetes and gateway
 
-    CheckEnv -->|No| CheckLocal{"Is APP_ENV == 'local' AND<br/>REDIS_URL defined?"}
-    CheckLocal -->|Yes: Dev Bypass| ParseEnv["Parse Local Dev URI"]
-    CheckLocal -->|No| FatalNoAuth["Fatal Error: No Secret File configured in non-local environment<br/>Exit Code 1"]
+| Component | Replicas | CPU request / limit | Memory request / limit |
+| --- | --- | --- | --- |
+| Gateway | 1 | 50m / 250m | 32 / 64 MiB |
+| Frontend | 1 | 25m / 100m | 16 / 48 MiB |
+| Backend | 2 | 100m / 500m each | 128 / 256 MiB each |
+| Redis | 1 | 50m / 250m | 64 / 128 MiB |
 
-    ParseSecret --> Scrub["Scrub temporary buffers; never log URI"]
-    ParseEnv --> Scrub
-    Scrub --> Success["Proceed to Broker Handshake"]
+Application requests total 368 MiB; limits total 752 MiB. Kubernetes, OS and filesystem cache are additional.
 
-    classDef pass fill:#064e3b,stroke:#059669,stroke-width:2px,color:#ffffff;
-    classDef fail fill:#7f1d1d,stroke:#dc2626,stroke-width:2px,color:#ffffff;
-    class CheckEnv,ReadFile,ValidateFile,CheckLocal,ParseSecret,ParseEnv,Scrub,Success pass;
-    class FatalFile,FatalNoAuth fail;
-```
+All application containers run as non-root with read-only root filesystems, dropped capabilities, no privilege escalation, RuntimeDefault seccomp and no mounted service-account token. Writable temporary directories use bounded emptyDir volumes. NetworkPolicies default to deny and allow the explicit service paths and cluster DNS.
 
----
+Local entry is HTTP on loopback port 8080. AWS entry uses ports 80/443 mapped to non-root gateway ports 8080/8443. HTTP redirects to HTTPS except `/ready`. Only the gateway is public. `/health`, `/live` and `/metrics` are blocked at the gateway.
 
-## 3. Kubernetes Manifest Configuration & Injection
+The gateway limits handshakes to 5/second per observed peer IP with a burst of 20. K3s ServiceLB may translate client addresses, so this is a coarse shared protection rather than an authenticated per-user quota.
 
-Configuration is decoupled into **Base ConfigMaps** (non-sensitive properties) and **Encrypted Secrets** (credentials), managed via Kustomize:
+## Browser behavior
 
-```mermaid
-flowchart LR
-    subgraph ConfigSources["Configuration Sources"]
-        CM["ConfigMap: backend-config<br/><i>(APP_ENV, LIMITS, CHANNELS)</i>"]
-        SEC["Secret: redis-credentials<br/><i>(Encrypted at rest via K3s)</i>"]
-        TLS["Secret: gateway-tls<br/><i>(TLS Cert & Private Key)</i>"]
-    end
+The client waits for the first session event before enabling send. It retains up to 500 events in memory and preserves unsent drafts during reconnects; nothing is persisted in browser storage.
 
-    subgraph Pods["Target Kubernetes Pods"]
-        BE["FastAPI Backend Pods<br/><i>(Mounts Secret at /etc/secrets/redis)</i>"]
-        GW["Nginx Gateway Pod<br/><i>(Mounts Secret at /etc/ssl/certs)</i>"]
-    end
+Retries use full jitter with a 500 ms base and a 15-second cap, at most 10 attempts. A stable 30-second session resets the attempt count. Close code 1012 uses a 0–500 ms jitter window. Terminal protocol/policy closures require manual action. The browser never automatically resends submitted messages.
 
-    CM -->|Injected via envFrom| BE
-    SEC -->|Mounted as volume file| BE
-    TLS -->|Mounted as volume file| GW
-```
+Static HTML uses `Cache-Control: no-store` and assets use `no-cache` because their filenames are not content-hashed. TLS certificates are operator-supplied; renewal is not automated.
 
----
+## Release configuration
 
-## 4. Nginx Gateway Reverse Proxy Configuration Blueprint
+`k8s/overlays/aws` deliberately contains invalid placeholders and must not be applied directly. `scripts/release.py render` injects an actual HTTPS origin, release ID and all four immutable image digests. It hashes configuration and bundle contents. `scripts/deploy.py` verifies the signed bundle and images before applying it.
 
-The Nginx gateway (`gateway/nginx.conf`) runs as an unprivileged container, proxying static assets and WebSocket streams:
-
-```nginx
-worker_processes auto;
-pid /tmp/nginx.pid;
-error_log /var/log/nginx/error.log warn;
-
-events {
-    worker_connections 2048;
-    multi_accept on;
-}
-
-http {
-    include /etc/nginx/mime.types;
-    default_type application/octet-stream;
-    
-    # Hide Nginx version banner
-    server_tokens off;
-
-    # Performance optimizations
-    sendfile on;
-    tcp_nopush on;
-    tcp_nodelay on;
-
-    # Upstream clusters using Kubernetes ClusterIP DNS
-    upstream backend_cluster {
-        server backend.chat-app.svc.cluster.local:8000;
-        keepalive 32;
-    }
-
-    upstream frontend_cluster {
-        server frontend.chat-app.svc.cluster.local:80;
-        keepalive 16;
-    }
-
-    # Port 80: HTTP Redirect to HTTPS
-    server {
-        listen 8080 default_server;
-        server_name _;
-        return 301 https://$host$request_uri;
-    }
-
-    # Port 443: HTTPS & WSS Termination
-    server {
-        listen 8443 ssl default_server;
-        server_name _;
-
-        ssl_certificate /etc/ssl/certs/tls.crt;
-        ssl_certificate_key /etc/ssl/certs/tls.key;
-        ssl_protocols TLSv1.2 TLSv1.3;
-        ssl_ciphers ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256;
-        ssl_prefer_server_ciphers on;
-        ssl_session_cache shared:SSL:10m;
-        ssl_session_timeout 1d;
-
-        # Static Frontend Assets
-        location / {
-            proxy_pass http://frontend_cluster;
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-        }
-
-        # WebSocket Upgrade Route
-        location /ws/ {
-            proxy_pass http://backend_cluster;
-            proxy_http_version 1.1;
-            proxy_set_header Upgrade $http_upgrade;
-            proxy_set_header Connection "Upgrade";
-            proxy_set_header Host $host;
-            proxy_set_header X-Real-IP $remote_addr;
-            proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-            proxy_set_header X-Forwarded-Proto $scheme;
-            proxy_read_timeout 3600s;
-            proxy_send_timeout 3600s;
-            proxy_buffering off;
-        }
-
-        # Security Blockade: Private Internal Endpoints Denied
-        location ~ ^/(metrics|live|health) {
-            deny all;
-            return 403;
-        }
-    }
-}
-```
-
----
-
-## 5. Redis Broker Configuration Blueprint
-
-Redis (`redis/redis.conf`) runs as an isolated, in-memory ephemeral broker:
-
-```ini
-# Network Binding
-bind 0.0.0.0
-port 6379
-protected-mode yes
-
-# Disable Persistence (Ephemeral Chat)
-save ""
-appendonly no
-
-# Memory Bounds & Eviction Policy
-maxmemory 48mb
-maxmemory-policy noeviction
-
-# Pub/Sub Output Buffer Protection (Hard: 32MB, Soft: 8MB for 60s)
-client-output-buffer-limit pubsub 32mb 8mb 60
-
-# Logging & Daemonization
-loglevel notice
-daemonize no
-
-# TCP Keepalive & Backlog
-tcp-keepalive 300
-tcp-backlog 511
-```
+Changing a Secret does not create a new release automatically. Coordinate Redis URL/ACL rotation and restart consumers; TLS rotation requires a gateway restart. Protect and retain previous release artifacts for rollback.
