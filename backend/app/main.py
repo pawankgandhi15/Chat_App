@@ -41,7 +41,7 @@ def create_app(settings=None):
             await runtime.broker.stop()
             log_event("stopped")
 
-    app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+    app = FastAPI(title="Baatchit", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.runtime = runtime
 
     @app.get("/live")

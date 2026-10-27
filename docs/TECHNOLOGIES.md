@@ -1,12 +1,12 @@
 # Technology Choices & Ecosystem Evaluation
 
-**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document defines the technology selection rationale, ecosystem compatibility matrix, supply chain security tooling, and dependency boundaries for Chat App.
+**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document defines the technology selection rationale, ecosystem compatibility matrix, supply chain security tooling, and dependency boundaries for Baatchit.
 
 ---
 
 ## 1. Technology Selection Rationale & Evaluated Alternatives
 
-Every technology in the Chat App stack was selected based on strict criteria: operational simplicity on constrained resources (2 vCPU / 4 GiB), native async I/O performance, containerization footprint, and zero cloud vendor lock-in.
+Every technology in the Baatchit stack was selected based on strict criteria: operational simplicity on constrained resources (2 vCPU / 4 GiB), native async I/O performance, containerization footprint, and zero cloud vendor lock-in.
 
 ```mermaid
 flowchart TD

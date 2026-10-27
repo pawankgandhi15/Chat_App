@@ -4,6 +4,12 @@ This file records actual repository changes. Planned application features remain
 
 ## Unreleased
 
+### Baatchit project identity — 2026-10-27
+
+- Renamed the app to Baatchit across the browser title, wordmark, favicon, package metadata, guides, diagrams, infrastructure names, scripts and test references.
+- Updated the README, local cluster/namespace/context, image names and release prefix consistently; kept the existing GitHub repository URL and signing identity valid.
+- Added environment migration notes and refreshed the architecture images using built-in imagegen with name-only edits.
+
 ### Runnable application and deployment tooling — 2026-10-27
 
 - Implemented the FastAPI/Redis chat backend, responsive browser UI and Nginx gateway with the chat.v1 contract, bounded queues/rates, reconnect behavior, dependency readiness and signal draining.

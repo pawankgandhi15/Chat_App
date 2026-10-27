@@ -2,7 +2,7 @@
 
 **Status: Production Architecture Specification. Baseline: Design Revision 5. Updated: 2026-10-26.**
 
-Welcome to the **Chat App System Design Handbook**. This repository of technical specifications, component contracts, operational playbooks, and capacity models serves as the primary engineering authority for designing, building, validating, and evolving the Chat App platform.
+Welcome to the **Baatchit System Design Handbook**. This repository of technical specifications, component contracts, operational playbooks, and capacity models serves as the primary engineering authority for designing, building, validating, and evolving the Baatchit platform.
 
 The architectural baseline reflects **Design Revision 5**: a distributed, event-driven, single-room real-time messaging system deployed on a unified **Kubernetes (K3s)** control plane (targeting local development via **k3d** and production demonstration on an **AWS EC2 2-vCPU / 4-GiB** candidate node in `ap-south-1`).
 

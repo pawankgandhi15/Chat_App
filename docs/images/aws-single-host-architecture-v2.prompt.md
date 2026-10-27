@@ -18,7 +18,7 @@ Input image 1: reference and redesign target. Recreate it with a much more polis
 PRIMARY DESIGN
 Create one high-resolution landscape image, approximately 16:10, with a white background, crisp vector-like geometry, consistent flat AWS architecture service icons, generous gutters and readable sans-serif typography. Use dark navy text, light gray frames, AWS orange for compute, purple for networking, green for storage, and subdued blue/red for application components. No heavy gradients, fuzzy glows, 3D effects, ornamental clouds, overlapping text or crossing arrows. A precisely aligned technical blueprint suitable for an engineering portfolio. Use short legible labels, not dense prose.
 
-TITLE: "Chat App | AWS Architecture"
+TITLE: "Baatchit | AWS Architecture"
 SUBTITLE: "Planned single-host deployment • ap-south-1 (Mumbai)"
 Small top-right status label: "DESIGN ONLY"
 

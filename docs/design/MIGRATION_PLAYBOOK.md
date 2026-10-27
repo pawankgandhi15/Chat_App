@@ -2,7 +2,7 @@
 
 **Status: Production Architecture Specification. Baseline: Design Revision 5. Updated: 2026-10-26.**
 
-This playbook defines the formal engineering protocols, operational gates, Prometheus anomaly triggers, and rollback procedures required to execute architectural migrations, infrastructure updates, and version cutovers for Chat App.
+This playbook defines the formal engineering protocols, operational gates, Prometheus anomaly triggers, and rollback procedures required to execute architectural migrations, infrastructure updates, and version cutovers for Baatchit.
 
 ---
 
@@ -124,18 +124,18 @@ echo "[ROLLBACK] Abort trigger activated. Initiating emergency rollback..."
 # 1. Capture current cluster diagnostic snapshot
 DIAG_DIR="/tmp/k8s-rollback-$(date +%Y%m%d%H%M%S)"
 mkdir -p "${DIAG_DIR}"
-kubectl get pods,services,endpoints -n chat-app -o wide > "${DIAG_DIR}/cluster-state.txt"
-kubectl logs -n chat-app -l app=backend --tail=500 > "${DIAG_DIR}/backend-logs.txt"
+kubectl get pods,services,endpoints -n baatchit -o wide > "${DIAG_DIR}/cluster-state.txt"
+kubectl logs -n baatchit -l app=backend --tail=500 > "${DIAG_DIR}/backend-logs.txt"
 echo "[ROLLBACK] Diagnostic snapshot saved to ${DIAG_DIR}"
 
 # 2. Re-apply verified prior release bundle
 echo "[ROLLBACK] Re-applying prior stable release bundle: release-manifest-previous.yaml..."
-kubectl apply -f /opt/chat-app/releases/release-manifest-previous.yaml
+kubectl apply -f /opt/baatchit/releases/release-manifest-previous.yaml
 
 # 3. Block until prior workloads are completely Ready (Timeout: 180s)
 echo "[ROLLBACK] Awaiting rollout completion..."
-kubectl rollout status deployment/backend -n chat-app --timeout=180s
-kubectl rollout status deployment/gateway -n chat-app --timeout=180s
+kubectl rollout status deployment/backend -n baatchit --timeout=180s
+kubectl rollout status deployment/gateway -n baatchit --timeout=180s
 
 # 4. Perform synthetic behavioral verification
 echo "[ROLLBACK] Executing post-rollback smoke check..."

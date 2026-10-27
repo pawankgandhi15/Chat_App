@@ -2,7 +2,7 @@
 
 > Design reference: the runnable implementation and measured results are recorded in [Implementation status](IMPLEMENTATION_STATUS.md). Use [Development](DEVELOPMENT.md), [Configuration](CONFIGURATION.md) and [Deployment](DEPLOYMENT.md) for current commands and defaults. The illustrative blueprints below are not the deployed source files.
 
-**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document provides the declarative Terraform 1.10+ HCL specifications, AWS VPC architecture, security group rules, IMDSv2 policies, and EC2 K3s host bootstrap scripts for Chat App.
+**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document provides the declarative Terraform 1.10+ HCL specifications, AWS VPC architecture, security group rules, IMDSv2 policies, and EC2 K3s host bootstrap scripts for Baatchit.
 
 ---
 
@@ -16,7 +16,7 @@ flowchart TD
         subgraph VPC["VPC 10.0.0.0/16"]
             IGW["Internet Gateway"]
             subgraph Subnet["Public Subnet 10.0.1.0/24 (ap-south-1a)"]
-                subgraph SG["Security Group: sg-chatapp"]
+                subgraph SG["Security Group: sg-baatchit"]
                     EC2["EC2 Instance (c7i-flex.large)<br/>2 vCPU / 4 GiB RAM<br/>Ubuntu 24.04 LTS x86_64"]
                     EBS["20 GiB gp3 Root Volume<br/>(KMS Encrypted · 3,000 IOPS)"]
                 end
@@ -53,7 +53,7 @@ terraform {
     }
   }
   backend "s3" {
-    bucket       = "chatapp-tfstate-ap-south-1-prod"
+    bucket       = "baatchit-tfstate-ap-south-1-prod"
     key          = "workload/terraform.tfstate"
     region       = "ap-south-1"
     encrypt      = true
@@ -65,7 +65,7 @@ provider "aws" {
   region = var.aws_region
   default_tags {
     tags = {
-      Project     = "ChatApp"
+      Project     = "Baatchit"
       Environment = var.environment
       ManagedBy   = "Terraform"
       Owner       = var.owner_tag
@@ -78,12 +78,12 @@ resource "aws_vpc" "main" {
   cidr_block           = "10.0.0.0/16"
   enable_dns_hostnames = true
   enable_dns_support   = true
-  tags = { Name = "chatapp-vpc" }
+  tags = { Name = "baatchit-vpc" }
 }
 
 resource "aws_internet_gateway" "igw" {
   vpc_id = aws_vpc.main.id
-  tags   = { Name = "chatapp-igw" }
+  tags   = { Name = "baatchit-igw" }
 }
 
 resource "aws_subnet" "public" {
@@ -91,7 +91,7 @@ resource "aws_subnet" "public" {
   cidr_block              = "10.0.1.0/24"
   availability_zone       = "${var.aws_region}a"
   map_public_ip_on_launch = true
-  tags = { Name = "chatapp-public-subnet" }
+  tags = { Name = "baatchit-public-subnet" }
 }
 
 resource "aws_route_table" "public" {
@@ -100,7 +100,7 @@ resource "aws_route_table" "public" {
     cidr_block = "0.0.0.0/0"
     gateway_id = aws_internet_gateway.igw.id
   }
-  tags = { Name = "chatapp-public-rt" }
+  tags = { Name = "baatchit-public-rt" }
 }
 
 resource "aws_route_table_association" "public" {
@@ -110,8 +110,8 @@ resource "aws_route_table_association" "public" {
 
 # 2. Strict Security Group
 resource "aws_security_group" "k3s_node" {
-  name        = "chatapp-node-sg"
-  description = "Ingress control for ChatApp single K3s node"
+  name        = "baatchit-node-sg"
+  description = "Ingress control for Baatchit single K3s node"
   vpc_id      = aws_vpc.main.id
 
   # Public HTTPS / WSS
@@ -167,7 +167,7 @@ resource "aws_instance" "k3s_host" {
     throughput            = 125
     encrypted             = true
     delete_on_termination = true
-    tags                  = { Name = "chatapp-root-ebs" }
+    tags                  = { Name = "baatchit-root-ebs" }
   }
 
   # Mandatory IMDSv2 Hardening (SSRF Protection)
@@ -179,7 +179,7 @@ resource "aws_instance" "k3s_host" {
 
   user_data = file("${path.module}/user_data.sh")
 
-  tags = { Name = "chatapp-k3s-node" }
+  tags = { Name = "baatchit-k3s-node" }
 }
 ```
 
@@ -194,7 +194,7 @@ Executed via cloud-init upon initial EC2 instance launch to configure Linux kern
 set -euo pipefail
 
 # 1. Apply High-Performance Network Sysctl Settings
-cat << 'EOF' > /etc/sysctl.d/99-chatapp.conf
+cat << 'EOF' > /etc/sysctl.d/99-baatchit.conf
 fs.file-max = 2097152
 net.core.somaxconn = 4096
 net.ipv4.tcp_max_syn_backlog = 4096
@@ -242,6 +242,6 @@ terraform plan -destroy -out=destroy.tfplan
 terraform apply destroy.tfplan
 
 # 3. Verify zero lingering billable assets
-aws ec2 describe-instances --filters "Name=tag:Project,Values=ChatApp" --query "Reservations[].Instances[].State.Name"
-aws ec2 describe-volumes --filters "Name=tag:Project,Values=ChatApp" --query "Volumes[].VolumeId"
+aws ec2 describe-instances --filters "Name=tag:Project,Values=Baatchit" --query "Reservations[].Instances[].State.Name"
+aws ec2 describe-volumes --filters "Name=tag:Project,Values=Baatchit" --query "Volumes[].VolumeId"
 ```

@@ -12,7 +12,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 LOCAL = ROOT / ".local"
 KUBECONFIG = LOCAL / "kubeconfig"
-NAME = "chat-app"
+NAME = "baatchit"
 
 
 def run(args, *, capture=False, data=None, check=True):
@@ -31,7 +31,7 @@ def k3d():
 
 
 def kubectl(*args, **kwargs):
-    return run(["kubectl", "--kubeconfig", KUBECONFIG, "--context", "k3d-chat-app", *args], **kwargs)
+    return run(["kubectl", "--kubeconfig", KUBECONFIG, "--context", "k3d-baatchit", *args], **kwargs)
 
 
 def secret(name, data):
@@ -49,7 +49,7 @@ def up():
     run(["docker", "info"], capture=True)
     for component in ["backend", "frontend", "gateway"]:
         run(["docker", "build", "-f", ROOT / component / "Dockerfile",
-             "-t", "chat-" + component + ":dev", "."])
+             "-t", "baatchit-" + component + ":dev", "."])
     clusters = json.loads(run([k3d(), "cluster", "list", "-o", "json"], capture=True).stdout)
     if not any(c["name"] == NAME for c in clusters):
         run([k3d(), "cluster", "create", "--config", "platform/k3d/config.yaml"])
@@ -57,7 +57,7 @@ def up():
     KUBECONFIG.write_text(config, encoding="utf-8")
     KUBECONFIG.chmod(0o600)
     run([k3d(), "image", "import", "--cluster", NAME,
-         "chat-backend:dev", "chat-frontend:dev", "chat-gateway:dev"])
+         "baatchit-backend:dev", "baatchit-frontend:dev", "baatchit-gateway:dev"])
     kubectl("apply", "-f", "k8s/platform/namespace.yaml")
     # A pair is provisioned together. Do not rotate one half on repeated startup.
     have_url = kubectl("-n", NAME, "get", "secret", "redis-url", capture=True, check=False).returncode == 0
@@ -75,7 +75,7 @@ def up():
         if component != "redis":
             kubectl("-n", NAME, "rollout", "restart", "deployment/" + component)
         kubectl("-n", NAME, "rollout", "status", "deployment/" + component, "--timeout=240s")
-    print("Chat App: http://localhost:8080")
+    print("Baatchit: http://localhost:8080")
     print("Explicit kubeconfig:", KUBECONFIG)
 
 
@@ -87,7 +87,7 @@ def main():
         up()
     elif args.action == "down":
         run([k3d(), "cluster", "delete", NAME])
-        print("Removed only the local chat-app k3d cluster.")
+        print("Removed only the local baatchit k3d cluster.")
     else:
         kubectl("-n", NAME, "get", "deployments,pods,services")
 

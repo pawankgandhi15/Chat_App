@@ -1,6 +1,6 @@
 # Architecture Decisions, Open Items & Risk Register
 
-**Design Revision 5 — 2026-10-26. Status: Authoritative Decision & Risk Ledger.** This document records the architectural decision register (ADR-01 to ADR-21), unresolved implementation items (OPEN-01 to OPEN-12), and the system risk register for Chat App.
+**Design Revision 5 — 2026-10-26. Status: Authoritative Decision & Risk Ledger.** This document records the architectural decision register (ADR-01 to ADR-21), unresolved implementation items (OPEN-01 to OPEN-12), and the system risk register for Baatchit.
 
 ---
 

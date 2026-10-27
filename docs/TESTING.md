@@ -1,6 +1,6 @@
 # Testing & Quality Assurance Plan
 
-**Design Revision 5 — 2026-10-26. Status: Production Verification Specification.** This document provides the multi-tier testing framework, property-based fuzzing guidelines, Acceptance Criteria (AC-01 to AC-18) verification runbooks, and distributed k6 load testing specifications for Chat App.
+**Design Revision 5 — 2026-10-26. Status: Production Verification Specification.** This document provides the multi-tier testing framework, property-based fuzzing guidelines, Acceptance Criteria (AC-01 to AC-18) verification runbooks, and distributed k6 load testing specifications for Baatchit.
 
 ---
 
@@ -37,20 +37,20 @@ Every functional requirement must be proven via reproducible automated verificat
 
 | Criterion ID | Target Verification Scenario | Execution Command / Script | Expected Pass Output |
 | :--- | :--- | :--- | :--- |
-| **AC-01** | Baseline Topology Spin-Up | `kubectl get pods -n chat-app -l app.kubernetes.io/part-of=chat-app` | Exactly 5 application Pods in `Running` state (`1/1 Ready`). |
+| **AC-01** | Baseline Topology Spin-Up | `kubectl get pods -n baatchit -l app.kubernetes.io/part-of=baatchit` | Exactly 5 application Pods in `Running` state (`1/1 Ready`). |
 | **AC-02** | Cross-Replica Fan-Out | `pytest tests/e2e/test_cross_replica_fanout.py` | Client on Pod 1 receives message from Client on Pod 2 with counterpart `container_id`. |
 | **AC-03** | Public Ingress TLS | `curl -vk https://${PUBLIC_IP}/ 2>&1 \| grep 'SSL connection using'` | Valid TLS 1.2/1.3 connection established. |
 | **AC-04** | Subprotocol Negotiation | `wscat -c wss://${PUBLIC_IP}/ws/alice -s invalid.v1` | Handshake rejected with HTTP 400 or HTTP 403. |
-| **AC-05** | Redis Dependency Recovery | `kubectl delete pod -n chat-app -l app=redis` | Backends transition to 503; recover to 200 within 15 seconds after restart. |
-| **AC-06** | Rolling Deployment Drain | `kubectl rollout restart deployment/backend -n chat-app` | Connected sockets receive close code `1012` and reconnect without dropped messages. |
+| **AC-05** | Redis Dependency Recovery | `kubectl delete pod -n baatchit -l app=redis` | Backends transition to 503; recover to 200 within 15 seconds after restart. |
+| **AC-06** | Rolling Deployment Drain | `kubectl rollout restart deployment/backend -n baatchit` | Connected sockets receive close code `1012` and reconnect without dropped messages. |
 | **AC-07** | Strict Wire Validation | `pytest tests/unit/test_protocol_schemas.py` | Payloads with unexpected properties raise `ValidationError`. |
-| **AC-08** | Immutable Digest Pinning | `kubectl get deployment backend -n chat-app -o jsonpath='{.spec.template.spec.containers[0].image}'` | Image pinned by `@sha256:...` digest. |
+| **AC-08** | Immutable Digest Pinning | `kubectl get deployment backend -n baatchit -o jsonpath='{.spec.template.spec.containers[0].image}'` | Image pinned by `@sha256:...` digest. |
 | **AC-09** | 10-Minute Rollback | `bash scripts/rollback.sh` | Cluster restores prior release bundle in $\le 10\text{ minutes}$. |
 | **AC-10** | Slow Consumer Eviction | `python tests/chaos/flood_slow_consumer.py` | Slow client disconnected with close code `1013`; fast client unaffected. |
 | **AC-11** | Clean Cloud Teardown | `terraform destroy -auto-approve` | Zero residual billable EC2 instances, EBS volumes, or Elastic IPs. |
 | **AC-12** | Input Code Point Limits | `pytest tests/unit/test_text_normalization.py` | Messages $> 2,000$ code points or empty strings rejected. |
 | **AC-13** | Rate Limit Enforcement | `python tests/chaos/burst_rate_limit.py` | Inbound bursts $> 5\text{ msg/s}$ throttled without closing socket. |
-| **AC-14** | NetworkPolicy Isolation | `kubectl exec -n chat-app deploy/gateway -- nc -zvw1 redis 6379` | Direct TCP connection times out / fails (exit code 1). |
+| **AC-14** | NetworkPolicy Isolation | `kubectl exec -n baatchit deploy/gateway -- nc -zvw1 redis 6379` | Direct TCP connection times out / fails (exit code 1). |
 | **AC-15** | Supply Chain Verification | `cosign verify --key cosign.pub ${BACKEND_IMAGE}` | Verification successful, signature verified. |
 | **AC-16** | Headroom Compliance | `ssh ec2-user@${NODE_IP} "free -m \| awk '/Mem:/ {print \$7}'"` | Free `MemAvailable` $\ge 512\text{ MiB}$ sustained. |
 | **AC-17** | Private Telemetry Denied | `curl -I https://${PUBLIC_IP}/metrics` | Gateway returns HTTP 403 Forbidden. |

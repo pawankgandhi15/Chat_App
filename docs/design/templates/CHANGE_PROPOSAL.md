@@ -230,8 +230,8 @@ If any of the following occur during Gates 5–7, abort immediately:
 
 ### 16.2 Executable Rollback Command
 ```bash
-kubectl apply -f /opt/chat-app/releases/release-manifest-previous.yaml
-kubectl rollout status deployment/backend -n chat-app --timeout=180s
+kubectl apply -f /opt/baatchit/releases/release-manifest-previous.yaml
+kubectl rollout status deployment/backend -n baatchit --timeout=180s
 ```
 
 ---
@@ -240,7 +240,7 @@ kubectl rollout status deployment/backend -n chat-app --timeout=180s
 
 | Test ID | Traceable AC / NFR | Test Scenario & Command | Expected Outcome | Verification Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **V-01** | AC-01 (Topology) | `kubectl get pods -n chat-app` | 5 Pods `1/1 Ready` | `PENDING` |
+| **V-01** | AC-01 (Topology) | `kubectl get pods -n baatchit` | 5 Pods `1/1 Ready` | `PENDING` |
 | **V-02** | AC-02 (Messaging) | `pytest tests/e2e/test_fanout.py` | Cross-pod echo $< 250\text{ ms}$ | `PENDING` |
 | **V-03** | NFR-06 (Headroom) | Prometheus memory exporter | Free RAM $\ge 512\text{ MiB}$ | `PENDING` |
 

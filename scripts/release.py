@@ -29,7 +29,7 @@ def validate_resources(resources, manifest):
         if not isinstance(obj, dict) or obj.get("kind") not in allowed:
             raise ValueError("Unsupported application resource kind")
         meta = obj.get("metadata", {})
-        if meta.get("namespace") != "chat-app" or not re.fullmatch(r"[a-z0-9-]+", meta.get("name", "")):
+        if meta.get("namespace") != "baatchit" or not re.fullmatch(r"[a-z0-9-]+", meta.get("name", "")):
             raise ValueError("Unexpected namespace or resource name")
         key = (obj["kind"], meta["name"])
         if key in identities:
@@ -164,7 +164,7 @@ def render(args):
         if obj["kind"] == "Deployment":
             name = obj["metadata"]["name"]
             template = obj["spec"]["template"]
-            template["metadata"].setdefault("annotations", {})["chat-app/release"] = args.release_id
+            template["metadata"].setdefault("annotations", {})["baatchit/release"] = args.release_id
             container = template["spec"]["containers"][0]
             container["image"] = images[name]
             for source in container.get("envFrom", []):

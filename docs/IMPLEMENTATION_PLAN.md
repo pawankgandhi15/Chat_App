@@ -2,7 +2,7 @@
 
 > Design reference: the runnable implementation and measured results are recorded in [Implementation status](IMPLEMENTATION_STATUS.md). Use [Development](DEVELOPMENT.md), [Configuration](CONFIGURATION.md) and [Deployment](DEPLOYMENT.md) for current commands and defaults. The illustrative blueprints below are not the deployed source files.
 
-**Design Revision 5 — 2026-10-26. Status: Production Engineering Roadmap.** This document defines the sequential implementation phases, work packages, exit criteria, and deliverable artifacts for building and releasing Chat App on Kubernetes.
+**Design Revision 5 — 2026-10-26. Status: Production Engineering Roadmap.** This document defines the sequential implementation phases, work packages, exit criteria, and deliverable artifacts for building and releasing Baatchit on Kubernetes.
 
 ---
 

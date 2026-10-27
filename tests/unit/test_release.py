@@ -18,9 +18,9 @@ def bundle(tmp_path, monkeypatch):
     objects.append({"apiVersion":"v1", "kind":"ConfigMap", "metadata":{"name":"backend-config"},
                     "data":{"APP_ENV":"public"}})
     for obj in objects:
-        obj["metadata"]["namespace"] = "chat-app"
+        obj["metadata"]["namespace"] = "baatchit"
     monkeypatch.setattr("scripts.release.subprocess.run", lambda *a, **kw: SimpleNamespace(stdout=yaml.safe_dump_all(objects)))
-    images = {c: "ghcr.io/test/chat-" + c + "@sha256:" + "a"*64 for c in ["backend", "frontend", "gateway", "redis"]}
+    images = {c: "ghcr.io/test/baatchit-" + c + "@sha256:" + "a"*64 for c in ["backend", "frontend", "gateway", "redis"]}
     imagefile = tmp_path / "images.json"
     imagefile.write_text(json.dumps(images))
     output = tmp_path / "release"

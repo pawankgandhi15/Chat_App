@@ -1,6 +1,6 @@
 # Backend Technology, Concurrency & Engineering Guide
 
-**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document provides the engineering specifications for the Python 3.12 / FastAPI backend runtime, AsyncIO concurrency models, Redis Pub/Sub supervision, backpressure mechanics, and graceful shutdown lifecycle for Chat App.
+**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document provides the engineering specifications for the Python 3.12 / FastAPI backend runtime, AsyncIO concurrency models, Redis Pub/Sub supervision, backpressure mechanics, and graceful shutdown lifecycle for Baatchit.
 
 ---
 

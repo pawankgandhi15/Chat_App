@@ -23,7 +23,7 @@ py -3.12 -m venv .venv
 
 Open **http://localhost:8080** in two browser tabs. Each tab receives an anonymous display name. Messages appear in both tabs, including when their connections use different backend Pods.
 
-The launcher builds images, creates the `chat-app` cluster if needed, imports the images, creates a Redis ACL/URL Secret pair, applies the local overlay and waits for readiness. Repeating `up` rebuilds and restarts the application while preserving the local credentials.
+The launcher builds images, creates the `baatchit` cluster if needed, imports the images, creates a Redis ACL/URL Secret pair, applies the local overlay and waits for readiness. Repeating `up` rebuilds and restarts the application while preserving the local credentials.
 
 ## Start on Linux/macOS
 
@@ -54,7 +54,7 @@ node --test tests/frontend/*.test.js
 .venv\Scripts\python.exe -m pytest tests/browser --browser-url http://localhost:8080 -q
 ~~~
 
-Integration tests require the locally built `chat-backend:dev` image. They create separate, randomly named Docker containers and remove their own resources afterwards. They stop Redis and signal a backend inside that test environment; they do not stop the Kubernetes workload.
+Integration tests require the locally built `baatchit-backend:dev` image. They create separate, randomly named Docker containers and remove their own resources afterwards. They stop Redis and signal a backend inside that test environment; they do not stop the Kubernetes workload.
 
 Browser tests save desktop/mobile screenshots in ignored `artifacts/`. On Linux, use `python -m playwright install --with-deps chromium` to install browser dependencies.
 
@@ -70,14 +70,22 @@ The default load command uses 25 clients, 5 aggregate messages/second, 512-byte 
 
 ~~~powershell
 .venv\Scripts\python.exe scripts/local.py status
-kubectl --kubeconfig .local/kubeconfig --context k3d-chat-app -n chat-app get pods
-kubectl --kubeconfig .local/kubeconfig --context k3d-chat-app -n chat-app logs deployment/backend --tail=50
+kubectl --kubeconfig .local/kubeconfig --context k3d-baatchit -n baatchit get pods
+kubectl --kubeconfig .local/kubeconfig --context k3d-baatchit -n baatchit logs deployment/backend --tail=50
 .venv\Scripts\python.exe scripts/local.py down
 ~~~
 
 The scripts always select the local kubeconfig/context explicitly. `down` deletes only the named local cluster; it does not stop Docker Desktop or remove global images. Chat history is ephemeral.
 
 The `.local/kubeconfig` grants access to the disposable cluster. Keep `.local/` and `artifacts/` untracked. Do not copy local credentials into AWS.
+
+## Existing environments after the rename
+
+The local cluster and namespace are now `baatchit`; the context is `k3d-baatchit`. Images use `baatchit-backend:dev`, `baatchit-frontend:dev` and `baatchit-gateway:dev`.
+
+If a pre-rename local cluster is running, stop that specific cluster with `k3d cluster stop <previous-cluster-name>` before `python scripts/local.py up`, because both configurations bind localhost port 8080. The new cluster gets its own credentials and namespace. Keep the stopped cluster until the new environment passes smoke checks, then remove it when it is no longer needed.
+
+For an existing cloud installation, review the new namespace, `baatchit-deployer` runner label/Role, `baatchit-*` registry prefix and Terraform state-key example as a migration. Preserve existing state and explicitly migrate it if changing the backend key; do not point Terraform at empty state for existing infrastructure. Old signed bundles target the old namespace and cannot be used unchanged with the renamed release validator. No cloud resources are changed by the source rename.
 
 ## Working on the code
 

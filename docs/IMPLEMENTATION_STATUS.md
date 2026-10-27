@@ -31,6 +31,8 @@ The integration suite checks fragmented oversized messages, binary/control/overl
 
 Browser evidence covers literal HTML-like text, two-tab messaging, disabled send before connection, draft retention across manual reconnect, no automatic resending and a 390-pixel layout without horizontal overflow. This is not a full accessibility audit or cross-browser certification.
 
+The Baatchit rename was checked again with all 42 automated tests, both Kustomize overlays, event-schema consistency, public smoke and network-isolation checks. The app ran in the new `baatchit` namespace using `baatchit-*` local images, and the browser check verified the new title and wordmark. The load measurements and image scans below/above remain evidence from the initial implementation baseline; they were not repeated for the name-only changes.
+
 ## Short local load measurement
 
 The 60-second steady-state run used 25 WebSocket clients split 13/12 across replicas, 5 aggregate messages/second and 512-byte payloads after a 5-second warmup:
@@ -56,7 +58,7 @@ Reproduce with `python scripts/load.py --warmup 5 --duration 60 --output artifac
 - Full 2-minute warmup + 30-minute off-node AWS load run, node memory/headroom, recovery timing and reboot testing.
 - Broader browser/accessibility testing, internet abuse handling and operational alert routing.
 
-The repository contains implementation for these workflows, but an implementation is not evidence that an external environment is configured correctly. No AWS resources have been provisioned and no changes have been pushed by this implementation task.
+The repository contains implementation for these workflows, but an implementation is not evidence that an external environment is configured correctly. No AWS resources have been provisioned. The initial implementation was pushed as commit `09cca07`; Baatchit branding is a subsequent change.
 
 ## Decisions reconciled during implementation
 

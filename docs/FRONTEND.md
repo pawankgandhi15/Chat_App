@@ -1,6 +1,6 @@
 # Frontend Technology, UI/UX & Client Architecture
 
-**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document provides the engineering specifications for the client-side presentation layer, native ES6 module architecture, DOM sanitization pipeline, and connection resilience state machine for Chat App.
+**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document provides the engineering specifications for the client-side presentation layer, native ES6 module architecture, DOM sanitization pipeline, and connection resilience state machine for Baatchit.
 
 ---
 
@@ -125,10 +125,10 @@ function getCodePointLength(text) {
 
 ```text
 +-------------------------------------------------------------------+
-|  Chat App               [● Connected]           [Theme: Dark]     |
+|  Baatchit               [● Connected]           [Theme: Dark]     |
 |  Display Name: Guest_a92f                       [Disconnect]      |
 +-------------------------------------------------------------------+
-|  [21:15:30] [System] Welcome to Chat App! Messages are ephemeral.  |
+|  [21:15:30] [System] Welcome to Baatchit! Messages are ephemeral.  |
 |  [21:15:32] [alice_99]: Hello, distributed real-time mesh!        |
 |  [21:15:35] [bob_12]: Hi Alice! Running on Kubernetes K3s.       |
 |                                                                   |

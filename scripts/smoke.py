@@ -21,7 +21,7 @@ async def check(base):
     base = base.rstrip("/")
     async with httpx.AsyncClient(base_url=base) as client:
         response = await client.get("/")
-        assert response.status_code == 200 and "Common Room" in response.text
+        assert response.status_code == 200 and "Baatchit" in response.text
         for route in ["/health", "/live", "/metrics"]:
             assert (await client.get(route)).status_code in {403, 404}
     wsbase = base.replace("https://", "wss://").replace("http://", "ws://")

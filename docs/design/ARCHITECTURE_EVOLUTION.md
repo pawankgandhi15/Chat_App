@@ -2,7 +2,7 @@
 
 **Status: Production Architecture Specification. Baseline: Design Revision 5. Updated: 2026-10-26.**
 
-This document defines the structured, multi-stage evolutionary roadmap for scaling, hardening, and modernizing the Chat App architecture. Each evolutionary stage addresses specific measured bottlenecks, reliability requirements, or product features.
+This document defines the structured, multi-stage evolutionary roadmap for scaling, hardening, and modernizing the Baatchit architecture. Each evolutionary stage addresses specific measured bottlenecks, reliability requirements, or product features.
 
 ---
 

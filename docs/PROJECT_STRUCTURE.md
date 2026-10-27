@@ -2,14 +2,14 @@
 
 > Design reference: the runnable implementation and measured results are recorded in [Implementation status](IMPLEMENTATION_STATUS.md). Use [Development](DEVELOPMENT.md), [Configuration](CONFIGURATION.md) and [Deployment](DEPLOYMENT.md) for current commands and defaults. The illustrative blueprints below are not the deployed source files.
 
-**Design Revision 5 — 2026-10-26. Status: Architecture Layout Specification.** This document defines the directory hierarchy, file placement rules, modular boundaries, and Git governance for all components of Chat App.
+**Design Revision 5 — 2026-10-26. Status: Architecture Layout Specification.** This document defines the directory hierarchy, file placement rules, modular boundaries, and Git governance for all components of Baatchit.
 
 ---
 
 ## 1. Master Repository Hierarchy
 
 ```text
-Chat_App/
+Baatchit/
 ├── .github/                              # Continuous Integration & Delivery Workflows
 │   ├── workflows/
 │   │   ├── validate.yml                  # Linting, unit tests, property tests, schema checks
@@ -61,7 +61,7 @@ Chat_App/
 │   │   ├── local/                        # k3d overlay (localhost ports, dev certificates)
 │   │   └── aws/                          # Production overlay (real hostnames, pinned digests)
 │   └── platform/                         # Cluster bootstrap resources
-│       ├── namespace.yaml                # chat-app namespace declaration
+│       ├── namespace.yaml                # baatchit namespace declaration
 │       └── deployer-rbac.yaml            # Least-privilege deployer ServiceAccount & Role
 ├── infra/                                # Terraform Infrastructure as Code
 │   ├── bootstrap-state/                  # Private versioned S3 bucket & locking initialization

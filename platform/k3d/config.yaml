@@ -1,6 +1,6 @@
 apiVersion: k3d.io/v1alpha5
 kind: Simple
-metadata: {name: chat-app}
+metadata: {name: baatchit}
 servers: 1
 agents: 0
 image: rancher/k3s:v1.37.1-k3s1

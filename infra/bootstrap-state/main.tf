@@ -14,7 +14,7 @@ resource "aws_s3_bucket" "state" {
   bucket        = var.bucket_name
   force_destroy = false
   lifecycle { prevent_destroy = true }
-  tags = { Project = "ChatApp", Purpose = "TerraformState" }
+  tags = { Project = "Baatchit", Purpose = "TerraformState" }
 }
 resource "aws_s3_bucket_versioning" "state" {
   bucket = aws_s3_bucket.state.id

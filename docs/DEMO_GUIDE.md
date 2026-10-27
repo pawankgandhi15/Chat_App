@@ -1,6 +1,6 @@
 # Live Demonstration & Presentation Guide
 
-**Design Revision 5 — 2026-10-26. Status: Demonstration Script Specification.** This document provides the step-by-step presentation script, audience walkthroughs, CLI execution commands, and talking points for demonstrating Chat App.
+**Design Revision 5 — 2026-10-26. Status: Demonstration Script Specification.** This document provides the step-by-step presentation script, audience walkthroughs, CLI execution commands, and talking points for demonstrating Baatchit.
 
 ---
 
@@ -8,11 +8,11 @@
 
 Before presenting the live demonstration, ensure the following prerequisites are met:
 
-- [ ] Cluster is active with 5 application Pods in `1/1 Ready` state (`kubectl get pods -n chat-app`).
+- [ ] Cluster is active with 5 application Pods in `1/1 Ready` state (`kubectl get pods -n baatchit`).
 - [ ] Public HTTPS/WSS endpoint is accessible via browser (`https://chat.example.com` or local `https://localhost:8443`).
 - [ ] Two independent browser windows (one standard, one incognito/private) open side-by-side.
-- [ ] Terminal split open with live logs streaming: `kubectl logs -n chat-app -l app=backend -f --tail=20`.
-- [ ] Rollback release manifest staged and ready: `/opt/chat-app/releases/release-manifest-previous.yaml`.
+- [ ] Terminal split open with live logs streaming: `kubectl logs -n baatchit -l app=backend -f --tail=20`.
+- [ ] Rollback release manifest staged and ready: `/opt/baatchit/releases/release-manifest-previous.yaml`.
 
 ---
 
@@ -49,7 +49,7 @@ Before presenting the live demonstration, ensure the following prerequisites are
 * **Execution Walkthrough:**
   1. While both Alice and Bob are actively connected, initiate a rolling restart in the terminal:
      ```bash
-     kubectl rollout restart deployment/backend -n chat-app
+     kubectl rollout restart deployment/backend -n baatchit
      ```
   2. Watch the terminal logs show:
      * Pod 1 receives `SIGTERM`.
@@ -65,7 +65,7 @@ Before presenting the live demonstration, ensure the following prerequisites are
 * **Execution Walkthrough:**
   1. Terminate the Redis broker Pod:
      ```bash
-     kubectl delete pod -n chat-app -l app=redis
+     kubectl delete pod -n baatchit -l app=redis
      ```
   2. Observe backend watchdog logs:
      * Nonce probe fails after 10s stale threshold.

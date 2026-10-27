@@ -20,7 +20,7 @@ jobs:
   deploy:
     if: github.ref == 'refs/heads/main'
     # Controlled runner: preinstall Python dependencies, kubectl and cosign.
-    runs-on: [self-hosted, linux, chat-app-deployer]
+    runs-on: [self-hosted, linux, baatchit-deployer]
     environment: aws-demo
     timeout-minutes: 20
     steps:

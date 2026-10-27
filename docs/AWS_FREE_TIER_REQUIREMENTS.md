@@ -1,12 +1,12 @@
 # AWS Free Tier & $100 Credit Budget Governance
 
-**Design Revision 5 — 2026-10-26. Status: Financial & Cloud Governance Specification.** This document provides the mathematical budget formulations, itemized cloud cost ledgers, automated billing alerts, and teardown verification protocols for Chat App on AWS.
+**Design Revision 5 — 2026-10-26. Status: Financial & Cloud Governance Specification.** This document provides the mathematical budget formulations, itemized cloud cost ledgers, automated billing alerts, and teardown verification protocols for Baatchit on AWS.
 
 ---
 
 ## 1. Credit Policy & Entitlement Framework
 
-AWS provides eligible new accounts with an initial promotional credit allocation of **$100.00** (with potential promotional milestone credits up to another $100.00). The Chat App infrastructure is strictly budgeted against the primary **$100.00 ceiling**.
+AWS provides eligible new accounts with an initial promotional credit allocation of **$100.00** (with potential promotional milestone credits up to another $100.00). The Baatchit infrastructure is strictly budgeted against the primary **$100.00 ceiling**.
 
 ### Governance Principles
 1. **Gross Spend vs Credit Offsets:** All cost models calculate **gross AWS on-demand charges**. Credits offset billable line items at month-end, but gross spend must remain strictly within the allocation.

@@ -43,7 +43,7 @@ def runtime(request):
     if not request.config.getoption("--integration"):
         pytest.skip("Use --integration for real Docker tests")
     suffix = secrets.token_hex(4)
-    network = "chat-test-" + suffix
+    network = "baatchit-test-" + suffix
     names = []
     directory = ROOT / ".local" / network
     directory.mkdir(parents=True)
@@ -70,7 +70,7 @@ def runtime(request):
                    "--mount", "type=bind,src=" + str(directory) + ",dst=/auth,readonly",
                    "-e", "APP_ENV=test", "-e", "REDIS_URL_FILE=/auth/url",
                    "-e", "SUBSCRIBER_HEARTBEAT_SECONDS=1", "-e", "SUBSCRIBER_STALE_SECONDS=3",
-                   "chat-backend:dev")
+                   "baatchit-backend:dev")
             names.append(name)
             urls.append("http://127.0.0.1:" + port(name))
         for url in urls:

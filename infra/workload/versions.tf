@@ -9,7 +9,7 @@ provider "aws" {
   region = var.region
   default_tags {
     tags = {
-      Project      = "ChatApp"
+      Project      = "Baatchit"
       Environment  = var.environment
       Owner        = var.owner
       TeardownDate = var.teardown_date

@@ -1,6 +1,6 @@
 # Kubernetes Deployment Design & Manifest Specification
 
-**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document provides the declarative Kubernetes manifest specifications, resource allocation models, NetworkPolicies, and lifecycle probe contracts for Chat App.
+**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document provides the declarative Kubernetes manifest specifications, resource allocation models, NetworkPolicies, and lifecycle probe contracts for Baatchit.
 
 ---
 
@@ -15,7 +15,7 @@ The application executes on **Kubernetes (K3s)** across two environments with ex
 | **Storage Engine** | Local host volume / emptyDir | 20 GiB gp3 encrypted EBS root |
 | **Public Ports** | Localhost `8080` (HTTP), `8443` (HTTPS) | Public IPv4 `:80` (Redirect), `:443` (TLS) |
 | **Ingress Controller**| K3s ServiceLB (host-port proxy) | K3s ServiceLB (host-port proxy) |
-| **Namespace** | `chat-app` | `chat-app` |
+| **Namespace** | `baatchit` | `baatchit` |
 
 ---
 
@@ -30,7 +30,7 @@ flowchart TB
         P443["Host Port TCP :443 (HTTPS / WSS)"]
     end
 
-    subgraph K8s["Kubernetes Namespace: chat-app"]
+    subgraph K8s["Kubernetes Namespace: baatchit"]
         GW_SVC["gateway Service<br/><i>[Type: LoadBalancer]</i><br/>Ports: 80, 443"]
         GW_POD["gateway Pod (1 Replica)<br/><i>Nginx unprivileged</i><br/>Ports: 8080, 8443"]
 
@@ -78,10 +78,10 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: backend
-  namespace: chat-app
+  namespace: baatchit
   labels:
     app.kubernetes.io/name: backend
-    app.kubernetes.io/part-of: chat-app
+    app.kubernetes.io/part-of: baatchit
 spec:
   replicas: 2
   strategy:
@@ -107,7 +107,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: backend
-        image: ghcr.io/pawankgandhi15/chat_app/backend:sha256-pinned
+        image: ghcr.io/pawankgandhi15/baatchit-backend:sha256-pinned
         imagePullPolicy: IfNotPresent
         securityContext:
           allowPrivilegeEscalation: false
@@ -183,7 +183,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: default-deny-all
-  namespace: chat-app
+  namespace: baatchit
 spec:
   podSelector: {}
   policyTypes:
@@ -197,7 +197,7 @@ apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
   name: backend-netpol
-  namespace: chat-app
+  namespace: baatchit
 spec:
   podSelector:
     matchLabels:

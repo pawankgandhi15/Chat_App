@@ -2,7 +2,7 @@
 
 **Status: Production Architecture Specification. Baseline: Design Revision 5. Updated: 2026-10-26.**
 
-This document specifies the wire protocol serialization contracts, input normalization rules, broker internal communications, and future relational persistence models for Chat App.
+This document specifies the wire protocol serialization contracts, input normalization rules, broker internal communications, and future relational persistence models for Baatchit.
 
 ---
 
@@ -161,7 +161,7 @@ client-output-buffer-limit pubsub 32mb 8mb 60
 
 ### 4.3 Redis ACL Configuration
 ```text
-user chatapp on >${REDIS_PASSWORD} ~global_chat_channel +publish +subscribe +unsubscribe +ping -@all
+user baatchit on >${REDIS_PASSWORD} ~global_chat_channel +publish +subscribe +unsubscribe +ping -@all
 ```
 The application user is restricted exclusively to Pub/Sub operations on `global_chat_channel` and `PING`. All administrative commands (`FLUSHALL`, `CONFIG`, `KEYS`, `SHUTDOWN`) are permanently disabled.
 

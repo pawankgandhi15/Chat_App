@@ -2,7 +2,7 @@
 
 **Status: Production Architecture Specification. Baseline: Design Revision 5. Updated: 2026-10-26.**
 
-This document provides definitive, end-to-end execution sequence diagrams for all critical connection, messaging, failure recovery, eviction, and release workflows in Chat App.
+This document provides definitive, end-to-end execution sequence diagrams for all critical connection, messaging, failure recovery, eviction, and release workflows in Baatchit.
 
 ---
 

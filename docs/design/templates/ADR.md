@@ -151,7 +151,7 @@ Describe the exact mechanism, class contracts, or manifest definitions enforcing
 
 | Evidence ID | Traceable Requirement / AC | Automated Verification Harness / Script | Acceptance Criteria / Expected Outcome | Verification Status |
 | :--- | :--- | :--- | :--- | :--- |
-| **EV-01** | AC-01 (Topology) | `kubectl get pods -n chat-app` | 5 application Pods in `1/1 Ready` state. | `PENDING` |
+| **EV-01** | AC-01 (Topology) | `kubectl get pods -n baatchit` | 5 application Pods in `1/1 Ready` state. | `PENDING` |
 | **EV-02** | AC-02 (Messaging) | `pytest tests/e2e/test_fanout.py` | Cross-replica messages received in $< 250\text{ ms}$. | `PENDING` |
 | **EV-03** | NFR-06 (Headroom) | Prometheus `node_memory_MemAvailable_bytes` | MemAvailable $\ge 512\text{ MiB}$ sustained. | `PENDING` |
 | **EV-04** | AC-14 (Isolation) | NetworkPolicy verification script | Direct gateway $\to$ Redis TCP connection fails. | `PENDING` |

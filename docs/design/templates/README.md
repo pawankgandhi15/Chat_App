@@ -2,7 +2,7 @@
 
 **Status: Production Engineering Standard. Template Pack Revision 3. Updated: 2026-10-26.**
 
-This guide defines the engineering standards, lifecycle governance, evidence requirements, and document archetypes for proposing, recording, and reviewing architectural decisions in Chat App.
+This guide defines the engineering standards, lifecycle governance, evidence requirements, and document archetypes for proposing, recording, and reviewing architectural decisions in Baatchit.
 
 ---
 

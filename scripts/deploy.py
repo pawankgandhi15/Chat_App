@@ -36,7 +36,7 @@ def main():
             for filename in ["release.json", "release.sigstore.json", *manifest["files"]]:
                 shutil.copyfile(source / filename, target / filename)
         verify(target, args.identity, args.image_prefix)
-        kube = ["kubectl", "--kubeconfig", args.kubeconfig, "--context", args.context, "-n", "chat-app"]
+        kube = ["kubectl", "--kubeconfig", args.kubeconfig, "--context", args.context, "-n", "baatchit"]
         current_file = state / "current.json"
         previous = json.loads(current_file.read_text()) if current_file.exists() else None
 

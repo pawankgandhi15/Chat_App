@@ -2,13 +2,13 @@
 
 **Status: Production Architecture Specification. Baseline: Design Revision 5. Updated: 2026-10-26.**
 
-The High-Level Design (HLD) specifies the macro-architecture, system topology, networking models, trust boundaries, and component responsibilities for the Chat App platform.
+The High-Level Design (HLD) specifies the macro-architecture, system topology, networking models, trust boundaries, and component responsibilities for the Baatchit platform.
 
 ---
 
 ## 1. System Purpose & Architectural Drivers
 
-Chat App is an enterprise-grade demonstration of real-time distributed messaging deployed onto an immutable Kubernetes substrate. It provides an ephemeral, anonymous, single-room chat environment engineered to demonstrate:
+Baatchit is an enterprise-grade demonstration of real-time distributed messaging deployed onto an immutable Kubernetes substrate. It provides an ephemeral, anonymous, single-room chat environment engineered to demonstrate:
 
 * **Horizontally Scalable WebSocket Fan-Out:** Decoupled ingress and broadcast distribution across independent application replicas using an authenticated message broker.
 * **Deterministic Backpressure & Resource Isolation:** Strict cgroup boundaries, monotonic token-bucket throttling, and bounded queue accounting to prevent resource starvation.
@@ -23,7 +23,7 @@ The baseline explicitly excludes persistent message storage, database migrations
 ## 2. C4 Architecture Models
 
 ### 2.1 C4 Level 1: System Context Diagram
-The System Context illustrates the boundaries between human actors, external deployment automation, cloud infrastructure, and the core Chat App system.
+The System Context illustrates the boundaries between human actors, external deployment automation, cloud infrastructure, and the core Baatchit system.
 
 ```mermaid
 flowchart TD
@@ -42,8 +42,8 @@ flowchart TD
         EC2["AWS EC2 Node<br/><i>[ap-south-1 Mumbai]</i><br/>2-vCPU / 4-GiB candidate running K3s"]
     end
 
-    subgraph ChatApp["Chat App Platform Boundary"]
-        App["Chat App System<br/><i>[Kubernetes K3s Cluster]</i><br/>Reverse proxy, static frontend, backend mesh, Redis Pub/Sub"]
+    subgraph Baatchit["Baatchit Platform Boundary"]
+        App["Baatchit System<br/><i>[Kubernetes K3s Cluster]</i><br/>Reverse proxy, static frontend, backend mesh, Redis Pub/Sub"]
     end
 
     Visitor -->|HTTPS / WSS (Port 443)| App
@@ -80,7 +80,7 @@ flowchart TB
             SLB["K3s ServiceLB DaemonSet<br/><i>[Host Port Forwarder]</i>"]
         end
 
-        subgraph K8sNamespace["Kubernetes Namespace: chat-app"]
+        subgraph K8sNamespace["Kubernetes Namespace: baatchit"]
             GW_SVC["gateway Service<br/><i>[Type: LoadBalancer]</i><br/>TCP 80, 443"]
 
             subgraph GW_POD["gateway Deployment (1 Replica)"]
@@ -159,7 +159,7 @@ flowchart TB
 ### 4.1 ServiceLB Host-Port Forwarding vs Cloud Load Balancers
 In standard AWS Kubernetes deployments, a `Service` of type `LoadBalancer` provisions an AWS Network Load Balancer (NLB) or Application Load Balancer (ALB), incurring hourly control-plane charges (~$18–$25/month). 
 
-To satisfy strict budget constraints ($100 lifetime demonstration budget), Chat App utilizes K3s **ServiceLB** (formerly Klipper LB):
+To satisfy strict budget constraints ($100 lifetime demonstration budget), Baatchit utilizes K3s **ServiceLB** (formerly Klipper LB):
 1. ServiceLB deploys a lightweight DaemonSet pod (`svclb-gateway`) that binds directly to the host's physical network interface on ports `80` and `443`.
 2. Inbound TCP SYN packets entering the host on `:80` or `:443` are routed via iptables rules directly to the `gateway` Service cluster IP (`10.43.x.x`).
 3. The gateway Pod terminates TLS using TLS certificates provisioned via Kubernetes Secrets (`tls-secret`).
@@ -246,7 +246,7 @@ flowchart LR
         Internet["Public Internet"]
     end
 
-    subgraph K8s["Kubernetes Cluster (Namespace: chat-app)"]
+    subgraph K8s["Kubernetes Cluster (Namespace: baatchit)"]
         subgraph IngressTier["Public Ingress Tier"]
             GW["gateway Pod<br/>(Nginx)"]
         end

@@ -6,7 +6,7 @@
 
 ## 1. Architectural Principles & System Invariants
 
-Chat App is engineered as a distributed, event-driven real-time messaging system built on five foundational architectural tenets:
+Baatchit is engineered as a distributed, event-driven real-time messaging system built on five foundational architectural tenets:
 
 1. **The Single-Writer Pattern:** Each connected WebSocket socket is managed by exactly one dedicated AsyncIO writer task within a single backend replica. Concurrent writes to the transport stream are physically prohibited, guaranteeing that WebSocket frames cannot interleave or corrupt TCP buffers.
 2. **Symmetric Distributed Fan-Out:** Backend replicas maintain no direct peer-to-peer communication. All message distribution—including sender echos—traverses an authenticated Redis Pub/Sub bus (`global_chat_channel`). Local and cross-replica delivery paths are functionally identical.
@@ -18,7 +18,7 @@ Chat App is engineered as a distributed, event-driven real-time messaging system
 
 ## 2. Macro Topology & C4 Container Architecture
 
-The system executes four Deployments producing **five steady-state application Pods** inside the `chat-app` namespace, supported by platform daemonsets and CoreDNS:
+The system executes four Deployments producing **five steady-state application Pods** inside the `baatchit` namespace, supported by platform daemonsets and CoreDNS:
 
 ```mermaid
 flowchart TB
@@ -38,7 +38,7 @@ flowchart TB
                     SLB["K3s ServiceLB DaemonSet<br/><i>[Host Port Proxy]</i>"]
                 end
 
-                subgraph K8sNamespace["Kubernetes Namespace: chat-app"]
+                subgraph K8sNamespace["Kubernetes Namespace: baatchit"]
                     GW_SVC["gateway Service<br/><i>[Type: LoadBalancer]</i><br/>TCP 80, 443"]
                     
                     subgraph GW_POD["gateway Deployment (1 Replica)"]
@@ -107,7 +107,7 @@ flowchart TB
 ## 3. Ingress Routing & Traffic Management
 
 ### 3.1 K3s ServiceLB Host-Port Forwarding
-To eliminate recurring AWS Application Load Balancer (ALB) control plane charges (~$25/month), Chat App deploys the **K3s ServiceLB** controller:
+To eliminate recurring AWS Application Load Balancer (ALB) control plane charges (~$25/month), Baatchit deploys the **K3s ServiceLB** controller:
 * ServiceLB runs a DaemonSet pod that binds directly to the host's physical network interface on ports `80` and `443`.
 * Traffic routed through ports `80` and `443` is mapped via kernel iptables rules to the `gateway` Service cluster IP (`10.43.x.x`).
 * Port `80` enforces an unconditional 301 redirect to HTTPS (`https://$host$request_uri`).
@@ -117,7 +117,7 @@ To eliminate recurring AWS Application Load Balancer (ALB) control plane charges
 The Nginx gateway implements unbuffered reverse-proxy routing for WebSocket upgrades:
 ```nginx
 location /ws/ {
-    proxy_pass http://backend.chat-app.svc.cluster.local:8000;
+    proxy_pass http://backend.baatchit.svc.cluster.local:8000;
     proxy_http_version 1.1;
     proxy_set_header Upgrade $http_upgrade;
     proxy_set_header Connection "Upgrade";
@@ -184,7 +184,7 @@ All inter-pod traffic is restricted via Kubernetes `NetworkPolicies`. Default-de
 ```mermaid
 flowchart LR
     Internet["Public Internet"] -->|TCP 80, 443 ALLOWED| GW["gateway Pod"]
-    Internet -.->|TCP 8000, 6379 BLOCKED| Cluster["chat-app Namespace"]
+    Internet -.->|TCP 8000, 6379 BLOCKED| Cluster["baatchit Namespace"]
 
     GW -->|TCP 8080 ALLOWED| FE["frontend Pod"]
     GW -->|TCP 8000 ALLOWED| BE["backend Pods"]

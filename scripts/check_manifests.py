@@ -13,7 +13,7 @@ def check():
         result = subprocess.run(["kubectl", "kustomize", str(ROOT / "k8s/overlays" / overlay)],
                                 check=True, capture_output=True, text=True)
         objects = list(yaml.safe_load_all(result.stdout))
-        assert all(o["metadata"].get("namespace") == "chat-app" for o in objects)
+        assert all(o["metadata"].get("namespace") == "baatchit" for o in objects)
         configs = {o["metadata"]["name"] for o in objects if o["kind"] == "ConfigMap"}
         deployments = [o for o in objects if o["kind"] == "Deployment"]
         assert len(deployments) == 4

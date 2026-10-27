@@ -18,6 +18,8 @@ def test_browser_chat_and_mobile(request):
         left.on("pageerror", lambda error: errors.append(str(error)))
         left.goto(url)
         right.goto(url)
+        expect(left).to_have_title("Baatchit · Live conversations")
+        expect(left.get_by_role("link", name="Baatchit", exact=True)).to_be_visible()
         expect(left.locator("#status")).to_have_text("Connected", timeout=20000)
         expect(right.locator("#status")).to_have_text("Connected", timeout=20000)
         left.get_by_label("Message general").fill("<img src=x onerror=alert(1)> hello 👋")

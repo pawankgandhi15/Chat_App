@@ -2,7 +2,7 @@
 
 **Status: Production Architecture Specification. Baseline: Design Revision 5. Updated: 2026-10-26.**
 
-This document provides the formal mathematical workload formulations, resource allocation equations, kernel network tuning specifications, and empirical sizing benchmarks for Chat App.
+This document provides the formal mathematical workload formulations, resource allocation equations, kernel network tuning specifications, and empirical sizing benchmarks for Baatchit.
 
 ---
 
@@ -72,7 +72,7 @@ $$\text{Broker Fan-Out Ingress Bandwidth} = \lambda_{\text{msg}} \times R \times
 
 ## 3. High-Performance Linux Kernel & Network Tuning
 
-To support high-density WebSocket connections without dropping TCP SYN packets or encountering socket descriptor exhaustion, the following kernel tuning parameters are enforced on the host EC2 instance via `/etc/sysctl.d/99-chat-app.conf`:
+To support high-density WebSocket connections without dropping TCP SYN packets or encountering socket descriptor exhaustion, the following kernel tuning parameters are enforced on the host EC2 instance via `/etc/sysctl.d/99-baatchit.conf`:
 
 ```ini
 # Maximum open file descriptors across the system

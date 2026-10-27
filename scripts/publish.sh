@@ -5,9 +5,9 @@ test -n "$GITHUB_REPOSITORY"
 test -n "$GITHUB_SHA"
 test -n "$PUBLIC_ORIGIN"
 mkdir -p artifacts/release
-repository=$(printf '%s' "$GITHUB_REPOSITORY" | tr '[:upper:]' '[:lower:]')
-prefix="ghcr.io/$repository-"
-docker buildx create --use --driver docker-container --name chat-release-builder
+owner=$(printf '%s' "$GITHUB_REPOSITORY" | cut -d / -f 1 | tr '[:upper:]' '[:lower:]')
+prefix="ghcr.io/$owner/baatchit-"
+docker buildx create --use --driver docker-container --name baatchit-release-builder
 for component in backend frontend gateway redis; do
   image="$prefix$component:$GITHUB_SHA"
   docker buildx build --platform linux/amd64 --provenance=true --sbom=true \
@@ -26,7 +26,7 @@ done
 python - <<'PY'
 import json, os
 from pathlib import Path
-prefix = "ghcr.io/" + os.environ["GITHUB_REPOSITORY"].lower() + "-"
+prefix = "ghcr.io/" + os.environ["GITHUB_REPOSITORY"].split("/")[0].lower() + "/baatchit-"
 images = {c: prefix+c+"@"+json.loads(Path("artifacts/"+c+".json").read_text())["containerimage.digest"]
           for c in ["backend","frontend","gateway","redis"]}
 Path("artifacts/images.json").write_text(json.dumps(images))

@@ -57,7 +57,7 @@ python scripts/bootstrap_secrets.py --kubeconfig /secure/admin.yaml --context aw
 
 The Secret helper sends values over stdin, preserves an existing Redis pair and refuses a partially missing pair. It updates the TLS Secret. Validate the certificate's hostname, expiry and key correspondence before using it.
 
-Issue a separate deployment identity and bind it to the `chat-deployer` namespace Role. Credential issuance/RoleBinding depends on the operator's identity system and is intentionally separate from application deployment. The deployment identity can apply application resources but cannot directly create Secrets, RBAC or namespaces. Ability to create Pods through Deployments is still sensitive; protect the runner and enforce the restricted Pod Security namespace.
+Issue a separate deployment identity and bind it to the `baatchit-deployer` namespace Role. Credential issuance/RoleBinding depends on the operator's identity system and is intentionally separate from application deployment. The deployment identity can apply application resources but cannot directly create Secrets, RBAC or namespaces. Ability to create Pods through Deployments is still sensitive; protect the runner and enforce the restricted Pod Security namespace.
 
 ## GitHub Actions
 
@@ -65,14 +65,14 @@ Issue a separate deployment identity and bind it to the `chat-deployer` namespac
 
 `release.yml` is manual and restricted to main. It runs validation, publishes four Linux amd64 images to GHCR, generates SPDX inventories, blocks fixable HIGH/CRITICAL vulnerabilities and signs each image plus `release.json` using GitHub OIDC/Cosign. It uploads a release artifact.
 
-`deploy.yml` is manual and runs on a controlled Linux runner labelled `chat-app-deployer`. Configure the protected `aws-demo` environment and these variables:
+`deploy.yml` is manual and runs on a controlled Linux runner labelled `baatchit-deployer`. Configure the protected `aws-demo` environment and these variables:
 
 | Variable | Meaning |
 | --- | --- |
 | `DEPLOY_KUBECONFIG` | Absolute path to the runner's restricted kubeconfig |
 | `DEPLOY_CONTEXT` | Exact intended context name |
 | `DEPLOY_STATE_DIR` | Private persistent directory for accepted bundles and deployment journal |
-| `IMAGE_PREFIX` | Exact lowercase prefix, e.g. `ghcr.io/pawankgandhi15/chat_app-` |
+| `IMAGE_PREFIX` | Exact lowercase prefix, e.g. `ghcr.io/pawankgandhi15/baatchit-` |
 
 Use trusted branches and protect the runner; do not run untrusted pull-request code on it. The workflow downloads the selected Release artifact. Signature verification independently checks the main-branch release workflow identity and GitHub OIDC issuer. Repository names and workflow paths must match the trust policy if this project is forked or renamed.
 
@@ -87,9 +87,9 @@ To deploy an already downloaded bundle from the controlled runner:
 ~~~bash
 python scripts/deploy.py --bundle /secure/releases/candidate \
   --kubeconfig /secure/deployer.yaml --context aws-demo \
-  --state-dir /secure/chat-deploy-state \
+  --state-dir /secure/baatchit-deploy-state \
   --identity https://github.com/pawankgandhi15/Chat_App/.github/workflows/release.yml@refs/heads/main \
-  --image-prefix ghcr.io/pawankgandhi15/chat_app-
+  --image-prefix ghcr.io/pawankgandhi15/baatchit-
 ~~~
 
 The script acquires a filesystem lock, verifies/copies the immutable bundle, performs a server dry-run, applies it, waits for the four Deployments and runs a public cross-replica smoke test. It updates `current.json` only after success. GitHub concurrency serializes workflow deployments as well.

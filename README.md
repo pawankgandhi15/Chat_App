@@ -1,14 +1,47 @@
-# Chat App · Common Room
+# Baatchit
 
-**A real-time chat application built with FastAPI, Redis and Kubernetes.**
+**Live conversations, built with FastAPI, Redis and Kubernetes.**
 
-Open one shared room, choose a temporary display name and exchange live text messages across two backend replicas. The responsive interface preserves unsent drafts through reconnects and renders messages safely as text.
+Baatchit is a lightweight browser-based messaging app. Open one shared room, choose a temporary display name and exchange live text messages across two backend replicas. The responsive interface preserves unsent drafts through reconnects and renders messages safely as text.
 
 [Run locally](docs/DEVELOPMENT.md) · [Implementation evidence](docs/IMPLEMENTATION_STATUS.md) · [API contract](docs/API_SPECIFICATION.md) · [System design](docs/design/README.md)
 
+## Project status
+
+**The application is implemented and verified locally.** The repository includes frontend/backend source, container builds, Kubernetes manifests, Terraform and delivery workflows.
+
+| Area | Current state |
+| --- | --- |
+| Browser chat and backend messaging | Implemented; unit, integration and browser checks passed |
+| Local Kubernetes | Verified with four Deployments and five application Pods |
+| Infrastructure code | Both Terraform roots validated; AWS provisioning remains pending |
+| Release and deployment automation | Implemented; signed cloud release and rollback acceptance remain pending |
+| Performance | Short local benchmark recorded; sustained AWS capacity remains to be measured |
+
+Verification results below were recorded on **27 October 2026**. For subsequent automated runs, see [GitHub Actions](https://github.com/pawankgandhi15/Chat_App/actions/workflows/validate.yml).
+
 ## Run locally
 
-Requires Python 3.12, Node.js 24, Docker with Linux containers, k3d 5.9.0 and kubectl 1.37.x. From the repository root in PowerShell:
+### Prerequisites
+
+| Tool | Requirement |
+| --- | --- |
+| Python | 3.12 |
+| Docker | Running with Linux containers enabled |
+| k3d | 5.9.0, available on PATH or in `.local/bin/` |
+| kubectl | 1.37.x on PATH |
+| Node.js | 24 for frontend tests; the browser app has no npm build step |
+
+Clone the repository, or use your existing checkout:
+
+~~~bash
+git clone https://github.com/pawankgandhi15/Chat_App.git Baatchit
+cd Baatchit
+~~~
+
+The project is named **Baatchit**. The clone URL above is the existing GitHub repository address; the command creates a local folder named `Baatchit`.
+
+### Windows · PowerShell
 
 ~~~powershell
 py -3.12 -m venv .venv
@@ -16,13 +49,31 @@ py -3.12 -m venv .venv
 .venv\Scripts\python.exe scripts/local.py up
 ~~~
 
+### Linux / macOS
+
+~~~bash
+python3.12 -m venv .venv
+. .venv/bin/activate
+python -m pip install --require-hashes -r requirements-dev.lock
+python scripts/local.py up
+~~~
+
 Open **http://localhost:8080** in two tabs. No AWS account is needed. The launcher builds the images, creates the local cluster and waits for all services.
 
-For Linux/macOS setup, tests, troubleshooting and cleanup, see [Development](docs/DEVELOPMENT.md). To stop the local environment:
+Try the room by sending a message from one tab, changing its display name, then disconnecting and reconnecting. Unsent drafts stay in that tab; messages missed during a disconnect are not replayed.
+
+### Inspect, rebuild and stop
+
+Run `up` again after editing source to rebuild the images and update the local workloads. Inspect or remove the local environment with:
 
 ~~~powershell
+.venv\Scripts\python.exe scripts/local.py status
 .venv\Scripts\python.exe scripts/local.py down
 ~~~
+
+On Linux/macOS with the virtual environment active, use `python scripts/local.py status` or `python scripts/local.py down`. The launcher uses its own explicit kubeconfig/context. Keep `.local/` untracked; it contains local cluster access material.
+
+For tool installation and troubleshooting, see [Development](docs/DEVELOPMENT.md).
 
 ## What is implemented
 
@@ -33,11 +84,11 @@ For Linux/macOS setup, tests, troubleshooting and cleanup, see [Development](doc
 - **Kubernetes:** four Deployments, five application Pods, readiness/liveness probes and enforced network isolation.
 - **Delivery tooling:** Terraform, validation workflows, scanned/signed release bundles and previous-bundle restoration.
 
-The local application is implemented and tested. AWS provisioning, GitHub release execution and cloud acceptance remain pending. Detailed results and limits are recorded in [Implementation status](docs/IMPLEMENTATION_STATUS.md).
+Detailed results and remaining acceptance work are recorded in [Implementation status](docs/IMPLEMENTATION_STATUS.md).
 
 ## Architecture
 
-![AWS K3s deployment design: one EC2 node with gateway, frontend, two backend Pods and Redis; private Terraform state in S3.](docs/images/aws-k3s-architecture.png)
+![Baatchit AWS K3s deployment design: one EC2 node with gateway, frontend, two backend Pods and Redis; private Terraform state in S3.](docs/images/aws-k3s-architecture.png)
 
 *AWS deployment design; cloud resources have not been provisioned. [View full-size](docs/images/aws-k3s-architecture.png).*
 
@@ -72,17 +123,60 @@ Python dependencies are hash-locked; container bases are pinned by digest. See [
 
 ## Verification
 
-Local checks passed: **26 Python unit tests, 6 JavaScript tests, 9 real-container integration tests and the Chromium desktop/mobile flow**. Public smoke tests, Kubernetes network checks, both Kustomize overlays and both Terraform roots also passed their applicable checks.
+**42 automated tests passed locally**, alongside runtime, infrastructure and image checks:
+
+| Check | Recorded result |
+| --- | --- |
+| Python unit tests | 26 passed |
+| JavaScript tests | 6 passed |
+| Real Docker/Redis integration tests | 9 passed |
+| Chromium desktop/mobile flow | 1 passed |
+| Gateway smoke and Kubernetes network isolation | Passed |
+| Kustomize overlays and event schema consistency | Passed |
+| Terraform configuration | Both roots validated |
+| Runtime image scans | All four images passed the fixable HIGH/CRITICAL vulnerability gate |
+
+The image scan gate excludes unfixed and lower-severity findings. These results describe the tested local build; they do not certify a deployed AWS environment.
 
 A short local run with **25 clients**, **5 aggregate messages/second** and **512-byte payloads** delivered all **7,500 expected events** during 60 seconds, with no duplicates and approximately **16 ms p95/p99** client-observed latency. This is local evidence, not a measured AWS capacity claim. The longer cloud test and node-memory target remain pending.
 
 ~~~powershell
 .venv\Scripts\python.exe -m pytest tests/unit -q
 node --test tests/frontend/*.test.js
+.venv\Scripts\python.exe scripts/check_manifests.py
 .venv\Scripts\python.exe scripts/smoke.py
 ~~~
 
-See [Development](docs/DEVELOPMENT.md) for the complete test commands and [Implementation status](docs/IMPLEMENTATION_STATUS.md) for evidence boundaries.
+The smoke check requires the local app to be running. Reproduce the short benchmark with:
+
+~~~powershell
+.venv\Scripts\python.exe scripts/load.py --warmup 5 --duration 60 --output artifacts/load-local.json
+~~~
+
+Integration tests use disposable Docker containers. Browser tests require Playwright's Chromium installation. See [Development](docs/DEVELOPMENT.md) for those commands and [Implementation status](docs/IMPLEMENTATION_STATUS.md) for the measurement conditions.
+
+## CI/CD and AWS delivery
+
+| Workflow | Trigger | Responsibility |
+| --- | --- | --- |
+| [Validate](.github/workflows/validate.yml) | Pull requests, pushes to `main`, reusable workflow calls | Application tests, local cluster checks and Terraform validation |
+| [Release](.github/workflows/release.yml) | Manual; publication restricted to `main` | Validate, publish four images to GHCR, scan, generate SBOMs and sign images/bundle |
+| [Deploy](.github/workflows/deploy.yml) | Manual on `main` using a controlled Linux runner | Verify the selected bundle, apply it, smoke-test and restore the previous accepted bundle on failure |
+
+**A Git push triggers validation, not AWS provisioning or deployment.** Release publication needs a real HTTPS origin and registry/OIDC access. Deployment also needs a configured `aws-demo` environment, restricted kubeconfig, TLS/Redis Secrets and a runner labelled `baatchit-deployer`.
+
+Terraform separates the protected S3 state bucket in `infra/bootstrap-state/` from the EC2/VPC workload in `infra/workload/`. Follow [Deployment](docs/DEPLOYMENT.md) for the reviewed provisioning, Secret bootstrap and release process. The AWS overlay contains placeholders and must be rendered into a verified release before deployment.
+
+## Configuration and security
+
+- Exact allowed origins and the `chat.v1` subprotocol are checked before accepting a WebSocket.
+- The backend enforces a 16 KiB transport payload cap, 2,000 normalized code points, connection/rate budgets and bounded delivery queues.
+- Redis uses an application ACL limited to the chat channel. Public mode reads its authenticated connection URI from a mounted Secret.
+- Application containers run as non-root with read-only root filesystems and restricted privileges; NetworkPolicies isolate service traffic.
+- Backend `/health`, `/live` and `/metrics` endpoints stay private. The gateway exposes only a minimal `/ready` response.
+- Message bodies render as text. Drafts and recent messages remain in tab memory; no durable chat storage is configured.
+
+See [Configuration](docs/CONFIGURATION.md) for settings and [Security](docs/SECURITY.md) for the wider threat model and acceptance goals.
 
 ## Repository layout
 
@@ -100,6 +194,8 @@ tests/               Unit, JavaScript, integration and browser tests
 .github/workflows/   Validation, manual release and manual deployment
 docs/                Requirements, operational guides and HLD/LLD handbook
 ~~~
+
+Application resources use the `baatchit` namespace and local cluster name, `k3d-baatchit` context, and `baatchit-*` image names. Existing checkouts created before the rename should follow the [rename notes](docs/DEVELOPMENT.md#existing-environments-after-the-rename) before starting the new environment.
 
 ## Documentation
 
@@ -121,6 +217,7 @@ docs/                Requirements, operational guides and HLD/LLD handbook
 
 | Guide | Contents |
 | --- | --- |
+| [Implementation Status](docs/IMPLEMENTATION_STATUS.md) | Delivered code, dated local evidence, reconciled decisions and remaining acceptance work |
 | [Implementation Plan](docs/IMPLEMENTATION_PLAN.md) | Ordered milestones and verification gates |
 | [Development](docs/DEVELOPMENT.md) | Working local setup, container workflows and debugging |
 | [Configuration](docs/CONFIGURATION.md) | Environment settings, defaults and configuration examples |
@@ -140,7 +237,7 @@ docs/                Requirements, operational guides and HLD/LLD handbook
 | [Release Checklist](docs/RELEASE_CHECKLIST.md) | Readiness gates and release evidence |
 | [Demo Guide](docs/DEMO_GUIDE.md) | Planned demonstration scenarios and evidence capture |
 
-For change history, see [CHANGELOG.md](CHANGELOG.md). The [original planning discussion](gemini-code-1792827209365.md) provides historical context. When examples or summaries differ, requirements own scope and targets, the API specification owns the wire contract, and configuration owns defaults; reconcile conflicts before implementation.
+The design handbook and planning documents retain future proposals. Use the implementation status for measured results, the API specification for the wire contract, and the current development/configuration/deployment guides for runnable commands and defaults.
 
 ## Scope and deployment
 

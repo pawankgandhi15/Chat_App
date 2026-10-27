@@ -24,7 +24,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: gateway
-          image: chat-gateway:dev
+          image: baatchit-gateway:dev
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -89,7 +89,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: frontend
-          image: chat-frontend:dev
+          image: baatchit-frontend:dev
           imagePullPolicy: IfNotPresent
           ports:
             - containerPort: 8080
@@ -148,7 +148,7 @@ spec:
         seccompProfile: {type: RuntimeDefault}
       containers:
         - name: backend
-          image: chat-backend:dev
+          image: baatchit-backend:dev
           imagePullPolicy: IfNotPresent
           envFrom:
             - configMapRef: {name: backend-config}

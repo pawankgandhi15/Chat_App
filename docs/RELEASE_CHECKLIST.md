@@ -1,6 +1,6 @@
 # Release Readiness & Verification Checklist
 
-**Design Revision 5 — 2026-10-26. Status: Production Release Governance Specification.** This document defines the mandatory pre-release gates, automated verification scripts, artifact evidence requirements, and sign-off governance for deploying Chat App.
+**Design Revision 5 — 2026-10-26. Status: Production Release Governance Specification.** This document defines the mandatory pre-release gates, automated verification scripts, artifact evidence requirements, and sign-off governance for deploying Baatchit.
 
 ---
 
@@ -52,7 +52,7 @@ Every candidate release must pass all 25 criteria across five release gates befo
 set -euo pipefail
 
 echo "=========================================================="
-echo "CHAT APP RELEASE PRE-FLIGHT VERIFIER"
+echo "BAATCHIT RELEASE PRE-FLIGHT VERIFIER"
 echo "=========================================================="
 
 MANIFEST_FILE="${1:-schemas/release.schema.json}"

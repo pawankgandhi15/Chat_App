@@ -12,7 +12,7 @@ def main():
     for flag in ["kubeconfig", "context", "tls-cert", "tls-key"]:
         parser.add_argument("--" + flag, required=True)
     args = parser.parse_args()
-    kube = ["kubectl", "--kubeconfig", args.kubeconfig, "--context", args.context, "-n", "chat-app"]
+    kube = ["kubectl", "--kubeconfig", args.kubeconfig, "--context", args.context, "-n", "baatchit"]
 
     def exists(name):
         result = subprocess.run(kube + ["get", "secret", name, "--ignore-not-found", "-o", "name"],
@@ -21,7 +21,7 @@ def main():
 
     def apply(name, values, kind="Opaque"):
         body = {"apiVersion":"v1", "kind":"Secret", "type":kind,
-                "metadata":{"name":name, "namespace":"chat-app"}, "stringData":values}
+                "metadata":{"name":name, "namespace":"baatchit"}, "stringData":values}
         # Secret values never appear in process arguments or tool output.
         subprocess.run(kube + ["apply", "-f", "-"], input=json.dumps(body), text=True,
                        check=True, capture_output=True)

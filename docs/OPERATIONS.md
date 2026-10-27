@@ -1,6 +1,6 @@
 # Production Operations, Observability & Incident Runbooks
 
-**Design Revision 5 — 2026-10-26. Status: Production Operational Specification.** This document provides the day-to-day operational procedures, Prometheus alert definitions, troubleshooting runbooks, and disaster recovery protocols for Chat App.
+**Design Revision 5 — 2026-10-26. Status: Production Operational Specification.** This document provides the day-to-day operational procedures, Prometheus alert definitions, troubleshooting runbooks, and disaster recovery protocols for Baatchit.
 
 ---
 
@@ -10,7 +10,7 @@ Operators maintain system reliability by executing the following routine checks 
 
 | Inspection Area | Monitoring Target / Command | Healthy Baseline Threshold | Action on Degradation |
 | :--- | :--- | :--- | :--- |
-| **Application Mesh** | `kubectl get pods -n chat-app` | Exactly 5 Pods in `1/1 Ready` state. | Inspect logs and describe Pods experiencing restarts. |
+| **Application Mesh** | `kubectl get pods -n baatchit` | Exactly 5 Pods in `1/1 Ready` state. | Inspect logs and describe Pods experiencing restarts. |
 | **Broker Supervision** | Backend `/health` subscriber state | Generational heartbeat echoed within 5.0s. | Check Redis connectivity and subscriber coroutine health. |
 | **Host Node Memory** | `free -m` on EC2 host | `MemAvailable` $\ge 512\text{ MiB}$ (NFR-06). | Stop test traffic; audit container memory usage via cgroups. |
 | **Network Ingress** | Public TLS probe (`curl -Iv https://...`) | HTTP 200 via HTTPS; valid SSL handshake. | Verify Let's Encrypt certificate renewal and ServiceLB host ports. |
@@ -28,13 +28,13 @@ kubectl config current-context
 kubectl get nodes -o wide
 
 # 2. Inspect Application Pods and Services
-kubectl -n chat-app get deployments,pods,services,endpointslices -o wide
+kubectl -n baatchit get deployments,pods,services,endpointslices -o wide
 
 # 3. Stream Tail Logs from Backend Replicas
-kubectl -n chat-app logs deployment/backend --all-pods=true --tail=100 -f
+kubectl -n baatchit logs deployment/backend --all-pods=true --tail=100 -f
 
 # 4. Inspect Recent Warning Events in Namespace
-kubectl -n chat-app get events --sort-by=.metadata.creationTimestamp \
+kubectl -n baatchit get events --sort-by=.metadata.creationTimestamp \
   --field-selector type=Warning
 
 # 5. Host Memory and Disk Inspection (on EC2 node)
@@ -53,18 +53,18 @@ systemctl status k3s --no-pager
 * **Remediation Procedure:**
   ```bash
   # 1. Inspect Redis Pod status and logs
-  kubectl describe pod -n chat-app -l app=redis
-  kubectl logs -n chat-app -l app=redis --tail=100
+  kubectl describe pod -n baatchit -l app=redis
+  kubectl logs -n baatchit -l app=redis --tail=100
 
   # 2. If Redis is crashed or OOMKilled, restart the Deployment
-  kubectl rollout restart deployment/redis -n chat-app
+  kubectl rollout restart deployment/redis -n baatchit
 
   # 3. Observe backend automatic generational reconnection
-  kubectl logs -n chat-app -l app=backend --tail=50 -f
+  kubectl logs -n baatchit -l app=backend --tail=50 -f
   # Look for: "Generational probe echoed. Transitioning to READY (Generation: X)"
 
   # 4. Verify readiness restored
-  kubectl get pods -n chat-app -l app=backend
+  kubectl get pods -n baatchit -l app=backend
   ```
 
 ---
@@ -75,10 +75,10 @@ systemctl status k3s --no-pager
 * **Remediation Procedure:**
   ```bash
   # 1. Identify terminating Pod and exit code
-  kubectl get pods -n chat-app -l app=backend -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[0].lastState.terminated.reason}{"\tExit:"}{.status.containerStatuses[0].lastState.terminated.exitCode}{"\n"}{end}'
+  kubectl get pods -n baatchit -l app=backend -o jsonpath='{range .items[*]}{.metadata.name}{"\t"}{.status.containerStatuses[0].lastState.terminated.reason}{"\tExit:"}{.status.containerStatuses[0].lastState.terminated.exitCode}{"\n"}{end}'
 
   # 2. Extract crash logs prior to restart
-  kubectl logs -n chat-app -l app=backend --previous --tail=200 > /tmp/backend-crash.log
+  kubectl logs -n baatchit -l app=backend --previous --tail=200 > /tmp/backend-crash.log
 
   # 3. If OOM occurred under legitimate load, evaluate cgroup limits in KUBERNETES.md
   # 4. If triggered by an unstable release, execute immediate rollback:
@@ -112,7 +112,7 @@ systemctl status k3s --no-pager
 * **Remediation Procedure:**
   ```bash
   # 1. Immediately initiate infrastructure destruction
-  cd /opt/chat-app/infra/workload
+  cd /opt/baatchit/infra/workload
   terraform destroy -auto-approve
 
   # 2. Verify all regional EC2 instances are terminated
@@ -132,19 +132,19 @@ systemctl status k3s --no-pager
 
 ```yaml
 groups:
-- name: chatapp-alerts
+- name: baatchit-alerts
   rules:
   # 1. Alert: No Ready Backends
-  - alert: ChatAppNoReadyBackends
-    expr: sum(kube_deployment_status_replicas_ready{deployment="backend",namespace="chat-app"}) == 0
+  - alert: BaatchitNoReadyBackends
+    expr: sum(kube_deployment_status_replicas_ready{deployment="backend",namespace="baatchit"}) == 0
     for: 15s
     labels:
       severity: critical
     annotations:
-      summary: "All ChatApp backend replicas are unavailable"
+      summary: "All Baatchit backend replicas are unavailable"
 
   # 2. Alert: Stale Redis Subscriber
-  - alert: ChatAppStaleRedisSubscriber
+  - alert: BaatchitStaleRedisSubscriber
     expr: chat_subscriber_heartbeat_age_seconds > 10.0
     for: 15s
     labels:
@@ -153,7 +153,7 @@ groups:
       summary: "Redis subscriber heartbeat is stale (> 10s)"
 
   # 3. Alert: Node Memory Headroom Floor Breached (NFR-06)
-  - alert: ChatAppNodeMemoryHeadroomLow
+  - alert: BaatchitNodeMemoryHeadroomLow
     expr: node_memory_MemAvailable_bytes < 536870912
     for: 30s
     labels:
@@ -162,7 +162,7 @@ groups:
       summary: "Node MemAvailable has breached the 512 MiB minimum floor"
 
   # 4. Alert: High Handshake Denial Rate
-  - alert: ChatAppHighHandshakeRejections
+  - alert: BaatchitHighHandshakeRejections
     expr: sum(rate(websocket_handshake_rejections_total[2m])) / sum(rate(websocket_handshake_attempts_total[2m])) > 0.05
     for: 1m
     labels:

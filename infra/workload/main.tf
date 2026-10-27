@@ -22,7 +22,7 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 resource "aws_security_group" "node" {
-  name_prefix = "chat-app-"
+  name_prefix = "baatchit-"
   description = "Public gateway and restricted SSH only"
   vpc_id      = aws_vpc.main.id
   ingress {
@@ -76,7 +76,7 @@ resource "aws_instance" "node" {
     encrypted             = true
     delete_on_termination = true
   }
-  tags = { Name = "chat-app-${var.environment}" }
+  tags = { Name = "baatchit-${var.environment}" }
 }
 output "instance_id" { value = aws_instance.node.id }
 output "public_ip" { value = aws_instance.node.public_ip }

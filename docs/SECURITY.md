@@ -1,12 +1,12 @@
 # System Security Architecture & Threat Modeling
 
-**Design Revision 5 — 2026-10-26. Status: Production Security Specification.** This document defines the zero-trust security architecture, STRIDE threat models, container hardening standards, Redis ACL policies, and supply-chain integrity controls for Chat App.
+**Design Revision 5 — 2026-10-26. Status: Production Security Specification.** This document defines the zero-trust security architecture, STRIDE threat models, container hardening standards, Redis ACL policies, and supply-chain integrity controls for Baatchit.
 
 ---
 
 ## 1. Zero-Trust Architecture & Boundary Defense
 
-Chat App implements defense-in-depth across six concentric security boundaries:
+Baatchit implements defense-in-depth across six concentric security boundaries:
 
 ```mermaid
 flowchart TD
@@ -57,7 +57,7 @@ flowchart TD
 
 ## 3. Container Hardening & Pod Security Standards (PSS Restricted)
 
-All application Pods in the `chat-app` namespace strictly enforce the Kubernetes **Restricted Pod Security Standard**:
+All application Pods in the `baatchit` namespace strictly enforce the Kubernetes **Restricted Pod Security Standard**:
 
 ```yaml
 securityContext:
@@ -89,7 +89,7 @@ The Redis broker operates in-memory with the default user disabled. Application 
 ```text
 # Redis 7 ACL Configuration
 user default off
-user chatapp on >${REDIS_PASSWORD} ~global_chat_channel +publish +subscribe +unsubscribe +ping -@all
+user baatchit on >${REDIS_PASSWORD} ~global_chat_channel +publish +subscribe +unsubscribe +ping -@all
 ```
 
 * **Disabled Administrative Commands:** All administrative and dangerous commands (`FLUSHALL`, `FLUSHDB`, `CONFIG`, `KEYS`, `SHUTDOWN`, `DEBUG`, `EVAL`) are permanently blocked.

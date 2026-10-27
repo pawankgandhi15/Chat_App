@@ -14,7 +14,7 @@ def probe(source, host, port, allowed):
     else:
         command = ["sh", "-c", 'command -v nc >/dev/null || exit 127; nc -z -w 2 "$1" "$2" || exit 42',
                    "probe", host, str(port)]
-    result = kubectl("-n", "chat-app", "exec", "deployment/" + source, "--", *command,
+    result = kubectl("-n", "baatchit", "exec", "deployment/" + source, "--", *command,
                      capture=True, check=False)
     expected = 0 if allowed else 42
     if result.returncode != expected:
@@ -28,9 +28,9 @@ if __name__ == "__main__":
     probe("backend", "redis", 6379, True)
     # DNS must work for the negative test to mean anything.
     for source in ["gateway", "frontend"]:
-        kubectl("-n", "chat-app", "exec", "deployment/" + source, "--", "nslookup", "redis.chat-app.svc.cluster.local", capture=True)
+        kubectl("-n", "baatchit", "exec", "deployment/" + source, "--", "nslookup", "redis.baatchit.svc.cluster.local", capture=True)
         probe(source, "redis", 6379, False)
-    pod = json.loads(kubectl("-n", "chat-app", "get", "pods", "-l", "app=redis",
+    pod = json.loads(kubectl("-n", "baatchit", "get", "pods", "-l", "app=redis",
                              "-o", "json", capture=True).stdout)["items"][0]
     probe("gateway", pod["status"]["podIP"], 6379, False)
     probe("frontend", pod["status"]["podIP"], 6379, False)
