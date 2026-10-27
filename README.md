@@ -1,6 +1,6 @@
 # Baatchit
 
-**Live conversations, built with FastAPI, Redis and Kubernetes.**
+**Live conversations, built with React, FastAPI, Redis and Kubernetes.**
 
 Baatchit is a lightweight browser-based messaging app. Open one shared room, choose a temporary display name and exchange live text messages across two backend replicas. The responsive interface preserves unsent drafts through reconnects and renders messages safely as text.
 
@@ -20,6 +20,8 @@ Baatchit is a lightweight browser-based messaging app. Open one shared room, cho
 
 Verification results below were recorded on **27 October 2026**. For subsequent automated runs, see [GitHub Actions](https://github.com/pawankgandhi15/Chat_App/actions/workflows/validate.yml).
 
+**React migration — 28 October 2026:** The frontend now uses React 19 and Vite 8. The production bundle, six protocol/client tests and three browser tests with intercepted WebSockets were checked locally. The older full-stack and load results below describe the previous frontend; Docker/Kubernetes and load checks have not been repeated for this migration.
+
 ## Run locally
 
 ### Prerequisites
@@ -30,7 +32,7 @@ Verification results below were recorded on **27 October 2026**. For subsequent 
 | Docker | Running with Linux containers enabled |
 | k3d | 5.9.0, available on PATH or in `.local/bin/` |
 | kubectl | 1.37.x on PATH |
-| Node.js | 24 for frontend tests; the browser app has no npm build step |
+| Node.js | 24 for the React/Vite development server, production build and frontend tests |
 
 Clone the repository, or use your existing checkout:
 
@@ -40,6 +42,19 @@ cd Baatchit
 ~~~
 
 The project is named **Baatchit**. The clone URL above is the existing GitHub repository address; the command creates a local folder named `Baatchit`.
+
+### Frontend only · React
+
+Run from the repository root:
+
+~~~bash
+npm ci
+npm run dev
+~~~
+
+Open **http://127.0.0.1:8080**. Vite listens on the loopback interface and refreshes the UI as source files change. This starts only the frontend; live chat needs the backend and Redis. On Windows PowerShell, use `npm.cmd` if execution policy blocks `npm.ps1`.
+
+Use `npm run build` to generate `frontend/dist/`, and `npm run preview` to inspect that production build after stopping the dev server. Both default to port 8080 and fail if it is already in use. For an optional local WebSocket proxy, see [Development](docs/DEVELOPMENT.md#frontend-only-react-development).
 
 ### Windows · PowerShell
 
@@ -110,7 +125,7 @@ Local development uses k3d. The AWS target uses K3s/containerd on one EC2 host, 
 
 | Layer | Implementation |
 | --- | --- |
-| Interface | HTML, CSS, native JavaScript modules |
+| Interface | React 19, React DOM, JSX, CSS and Vite 8 |
 | API and transport | Python 3.12, FastAPI, Uvicorn, Pydantic, WebSockets |
 | Messaging | Redis Pub/Sub and redis.asyncio |
 | Web serving | Nginx static server and reverse proxy |
@@ -119,7 +134,7 @@ Local development uses k3d. The AWS target uses K3s/containerd on one EC2 host, 
 | Delivery | GitHub Actions, GHCR, Trivy, Cosign |
 | Verification | pytest, Hypothesis, Node test runner, Playwright |
 
-Python dependencies are hash-locked; container bases are pinned by digest. See [Configuration](docs/CONFIGURATION.md) for actual settings and [Technologies](docs/TECHNOLOGIES.md) for design rationale.
+Python dependencies are hash-locked; JavaScript dependencies use exact versions and `package-lock.json`; container bases are pinned by digest. The frontend Dockerfile builds with Node and serves the compiled assets with Nginx. See [Configuration](docs/CONFIGURATION.md) for actual settings and [Technologies](docs/TECHNOLOGIES.md) for design rationale.
 
 ## Verification
 
@@ -182,7 +197,7 @@ See [Configuration](docs/CONFIGURATION.md) for settings and [Security](docs/SECU
 
 ~~~text
 backend/             FastAPI application and locked runtime dependencies
-frontend/            Browser interface, modules and static server
+frontend/            React components, chat client, Vite build and Nginx server
 gateway/             Local/HTTPS Nginx routing
 redis/               Digest-pinned Redis release image
 k8s/                 Base workloads, policies, platform resources and overlays

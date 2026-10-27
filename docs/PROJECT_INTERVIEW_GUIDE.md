@@ -4,6 +4,8 @@
 
 When a design document disagrees with the running code, the source code and the implementation status file win. Commands and defaults can change after this snapshot, so re-check the linked files before repeating a deployment.
 
+**Frontend update — 28 October 2026:** React 19 and Vite 8 now provide the presentation/build layer. Frontend descriptions and source links below reflect this migration. The 42-test and load results remain the original October 27 baseline; see [implementation status](IMPLEMENTATION_STATUS.md) for the separate React checks.
+
 ## How to read this guide
 
 - **Simple view** boxes explain an idea in plain words. Read these first.
@@ -97,7 +99,7 @@ The gateway returns HTTP 403 for external `/health`, `/live` and `/metrics`, and
 
 | Layer | Technology | Rationale and trade-off |
 | --- | --- | --- |
-| Browser | Semantic HTML, CSS, native JS ES modules | Small static app, no bundler. State and protocol checks are explicit |
+| Browser | React 19, JSX, CSS and Vite 8 | Component rendering, a bundled static build and explicit protocol/state modules |
 | API | Python 3.12, FastAPI/Starlette, Uvicorn | Async WebSocket handling. One worker per Pod keeps process state simple |
 | Contracts | Pydantic models plus JSON Schema | Strict server event shapes. Browser independently re-validates |
 | Bus | Redis 7 Pub/Sub, `redis.asyncio` | Simple low-latency fanout. No replay or acknowledgments |
@@ -116,7 +118,7 @@ Exact versions and digests live in lockfiles and Dockerfiles. K3s avoids the man
 
 ### 5.1 Opening a session
 
-1. `frontend/js/app.js` generates a name like `guest_1234abcd` (first eight characters of a random UUID). The user may edit it; it is only a label.
+1. `frontend/src/useChat.js` generates a name like `guest_1234abcd` (first eight characters of a random UUID). The user may edit it; it is only a label.
 2. `frontend/js/connection.js` opens `ws://<host>/ws/<encoded-name>` (or `wss://` from HTTPS), requesting `chat.v1`.
 3. The gateway proxies the upgrade to the backend Service. `backend/app/main.py` rejects: unapproved origin with 403; wrong or missing subprotocol with 400; invalid name with 400; unready, full or draining replica with 503. All of this happens **before** the socket is accepted.
 4. The backend reserves a capacity slot and sends a direct `session` event. It is not published to Redis.
@@ -267,12 +269,12 @@ On a termination signal the entrypoint starts a drain: new sessions are refused,
 
 ## 8. Frontend and UI/UX
 
-The app serves native modules directly from `frontend/js/`. `app.js` wires view, state store and connection. `state.js` keeps immutable-style state in memory. `connection.js` owns socket generations and timers. `protocol.js` validates and normalizes. `view.js` renders text safely.
+Vite bundles the React entrypoint in `frontend/src/main.jsx`. `App.jsx` composes the sidebar, header, message list and composer. `useChat.js` subscribes to the existing store through `useSyncExternalStore` and releases sockets/timers on effect cleanup. `state.js`, `connection.js` and `protocol.js` remain framework-independent. `MessageList.jsx` renders escaped text and preserves the reader's position across updates and history eviction.
 
 | UI behavior | Implementation and consequence |
 | --- | --- |
 | Responsive layout | Desktop sidebar and chat pane adapt to mobile; a 390 px Chromium flow was tested |
-| Safe rendering | Message bodies and labels use `textContent`, so HTML-like input shows as plain text |
+| Safe rendering | Message bodies and labels use escaped React text children, so HTML-like input shows as plain text |
 | Accessibility basics | Semantic labels, skip link, live status and log regions, keyboard controls. Full audit pending |
 | Compose | Enter sends; Shift+Enter inserts a newline; IME composition is handled |
 | Reading continuity | Scroll position is kept while reading older messages; a 'New messages' button appears |
@@ -287,7 +289,7 @@ The app serves native modules directly from `frontend/js/`. `app.js` wires view,
 
 > **Deep dive: the backoff schedule.** With full jitter, each wait is a random value between 0 and min(15 s, 0.5 s x 2^n). The upper bounds run roughly 0.5, 1, 2, 4, 8, then 15 s for the remaining attempts, so ten attempts wait at most about 90 s in total and on average about half that. Full jitter gives lower server load than 'equal jitter' or no jitter during a mass reconnect, at the price of occasional very short waits.
 
-> **Deep dive: why `textContent`.** Setting `textContent` makes the browser treat input as text, so injected markup is displayed, not executed. It is the primary XSS defense. The Nginx CSP is a second layer. Input validation is NOT treated as sanitization, because blocking control characters says nothing about HTML safety. Any future markdown, link previews or attachments need a new sanitization design and a fresh threat review.
+> **Deep dive: safe React text.** JSX string children are rendered as text, so HTML-like message content appears literally. The app never sends message text through `dangerouslySetInnerHTML`. It is the primary XSS defense. The Nginx CSP is a second layer. Input validation is NOT treated as sanitization, because blocking control characters says nothing about HTML safety. Any future markdown, link previews or attachments need a new sanitization design and a fresh threat review.
 
 The UI has no read receipts, typing indicators, user list, private messages, media, search, or push notifications. Those are product extensions, not hidden features.
 
@@ -366,7 +368,7 @@ Scanning gates fixable HIGH and CRITICAL vulnerabilities only. It does not mean 
 | Risk | Current control | Residual risk |
 | --- | --- | --- |
 | Cross-site WebSocket use from a browser | Exact `Origin` check plus required subprotocol | Origin is not authentication; custom clients can set headers |
-| Script injection in chat | Strict validation, DOM `textContent`, gateway CSP | Future rich text or attachments need new rules |
+| Script injection in chat | Strict validation, escaped React text, gateway CSP | Future rich text or attachments need new rules |
 | Oversized or flooded input | 16 KiB frame cap, 2,000 code points, connection and token budgets, gateway handshake limit | Distributed abuse can still overload a small host |
 | Slow reader | Per-client event and byte queue, write deadline | Its queued messages are discarded when it is closed |
 | Redis misuse | ACL, Secret mounts, restricted network path | A compromised backend can still use the authorized channel |
@@ -760,7 +762,7 @@ A future authenticated version would validate credentials during admission, bind
 
 #### 28. How do you prevent XSS?
 
-The primary control is how content reaches the DOM. [view.js](../frontend/js/view.js) assigns message content and labels using `textContent`. A string such as `<img src=x onerror=alert(1)>` becomes visible text rather than an HTML element with an executable handler. The browser integration test checks HTML-like text as inert content. This is stronger than hoping a character blacklist removes every dangerous HTML form.
+The primary control is how content reaches the DOM. [MessageList.jsx](../frontend/src/components/MessageList.jsx) renders message bodies and labels as React text children. A string such as `<img src=x onerror=alert(1)>` becomes visible text rather than an HTML element with an executable handler. The browser integration test checks HTML-like text as inert content. This is stronger than hoping a character blacklist removes every dangerous HTML form.
 
 The gateway also sends a restrictive Content Security Policy that limits scripts/styles/connections to the same origin, blocks objects, and disallows embedding the page in another frame. That provides additional defense but does not replace safe DOM construction. Backend Unicode/control/size validation serves the wire and resource policy; it is not an HTML sanitizer.
 
@@ -1691,7 +1693,7 @@ These are **optional local learning exercises**, not new implementation or claim
 
 Open two tabs and give them different names. Confirm they are connected before sending a distinctive plain-text message. Explain the browser draft update and `Connection.send` check, gateway WebSocket routing, server validation/event creation, Redis publication, subscriber consumption, per-session queue and final safe DOM rendering. Identify the sending and receiving session Pod IDs so you know whether the experiment actually crossed replicas.
 
-Use [app.js](../frontend/js/app.js), [connection.js](../frontend/js/connection.js), [routes.conf](../gateway/routes.conf), [sessions.py](../backend/app/sessions.py), [broker.py](../backend/app/broker.py), [protocol.py](../backend/app/protocol.py) and [view.js](../frontend/js/view.js). A strong explanation says who owns each piece of state and why the sender does not get a separate local echo. Deliverable: a sequence diagram plus the difference between browser send success and recipient receipt.
+Use [useChat.js](../frontend/src/useChat.js), [connection.js](../frontend/js/connection.js), [routes.conf](../gateway/routes.conf), [sessions.py](../backend/app/sessions.py), [broker.py](../backend/app/broker.py), [protocol.py](../backend/app/protocol.py) and [MessageList.jsx](../frontend/src/components/MessageList.jsx). A strong explanation says who owns each piece of state and why the sender does not get a separate local echo. Deliverable: a sequence diagram plus the difference between browser send success and recipient receipt.
 
 ### Exercise 2: Observe Redis outage and recovery
 
@@ -1806,7 +1808,7 @@ Use executable code to answer “what does it do now?”, [implementation status
 | What goes over the wire? | [API specification](API_SPECIFICATION.md), [schema](../schemas/events-v1.schema.json), [server models](../backend/app/protocol.py), [browser parser](../frontend/js/protocol.js) | Field sets, version, validation, close codes and compatibility |
 | What is the real backend lifecycle? | [Main](../backend/app/main.py), [sessions](../backend/app/sessions.py), [broker](../backend/app/broker.py), [entrypoint](../backend/app/run.py) | Admission, session-first ordering, publication/fanout and shutdown |
 | Which defaults and secrets matter? | [Configuration](CONFIGURATION.md), [settings](../backend/app/settings.py), [Secret bootstrap](../scripts/bootstrap_secrets.py) | Rates, bounds, exact origins, URI source and coordinated credential handling |
-| How does the browser behave? | [Frontend guide](FRONTEND.md), [connection](../frontend/js/connection.js), [state](../frontend/js/state.js), [view](../frontend/js/view.js) | Draft/retry policy, memory bound, DOM safety, keyboard flow |
+| How does the browser behave? | [Frontend guide](FRONTEND.md), [connection](../frontend/js/connection.js), [state](../frontend/js/state.js), [React message list](../frontend/src/components/MessageList.jsx) | Draft/retry policy, memory bound, DOM safety, keyboard flow |
 | What actually runs in Kubernetes? | [Kubernetes guide](KUBERNETES.md), [workloads](../k8s/base/workloads.yaml), [services](../k8s/base/services.yaml), [network policies](../k8s/base/network-policies.yaml) | Four Deployments/five app Pods, resources, probes and permitted paths |
 | What is the AWS target? | [Infrastructure](INFRASTRUCTURE.md), [workload Terraform](../infra/workload/main.tf), [state bootstrap](../infra/bootstrap-state/main.tf), [AWS requirements](AWS_FREE_TIER_REQUIREMENTS.md) | Declared resources, account-specific worksheet, host limits and pending apply |
 | How are releases trusted and restored? | [Deployment](DEPLOYMENT.md), [release validator](../scripts/release.py), [publisher](../scripts/publish.sh), [deployer](../scripts/deploy.py) | Digests, signatures/trusted identity, artifact retention and restoration conditions |

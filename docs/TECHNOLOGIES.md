@@ -11,7 +11,7 @@ Every technology in the Baatchit stack was selected based on strict criteria: op
 ```mermaid
 flowchart TD
     subgraph ClientTier["Client Presentation Layer"]
-        JS["Native Vanilla JavaScript (ES6+)<br/><i>Zero frameworks, zero external CDNs</i>"]
+        JS["React 19 + Vite 8<br/><i>Bundled static assets, no external CDNs</i>"]
     end
 
     subgraph IngressTier["Ingress & Reverse Proxy Layer"]
@@ -44,7 +44,7 @@ flowchart TD
 
 | Layer | Selected Technology | Rejected Alternatives | Primary Selection Rationale & Trade-Offs |
 | :--- | :--- | :--- | :--- |
-| **Client Presentation** | **Native HTML5 / CSS3 / Vanilla ES6** | React, Vue, Svelte, Angular | Zero build-step complexity; zero node_modules dependencies; zero CDN outages; minimal bundle footprint ($< 25\text{ KiB}$ total); pure DOM manipulation via `textContent` eliminates XSS vectors. |
+| **Client Presentation** | **React 19 + React DOM + Vite 8 + CSS** | Native DOM rendering (superseded), Vue, Svelte, Angular | React components own UI rendering while existing modules retain protocol/state logic. Vite adds a build step and a larger browser bundle. Dependencies are locked and bundled locally; user content stays in escaped text children. |
 | **API & Application** | **Python 3.12 + FastAPI + Uvicorn** | Node.js / Express, Go / Gin, Rust / Axum | First-class AsyncIO concurrency; Pydantic V2 native C-speed data validation; automatic OpenAPI documentation; single-worker process model eliminates multi-thread contention on 2-vCPU nodes. |
 | **Broker Engine** | **Redis 7 (In-Memory Pub/Sub)** | Apache Kafka, RabbitMQ, NATS | Extreme lightweight memory footprint ($< 35\text{ MiB}$ base RSS); sub-millisecond Pub/Sub dispatch; built-in ACLs; zero disk-persistence requirements for ephemeral chat. |
 | **Ingress & Proxy** | **Nginx 1.27+ (`nginx-unprivileged`)** | Envoy, Traefik, Caddy | Battle-tested connection pooling; native WebSocket upgrade proxying; granular memory control; non-root execution by default; minimal memory footprint ($< 15\text{ MiB}$). |
@@ -57,7 +57,9 @@ flowchart TD
 
 ## 2. Formal Ecosystem Compatibility Matrix
 
-All components must strictly adhere to the following pinned major/minor versions during implementation and build artifact generation:
+The frontend was migrated on 2026-10-28: React/React DOM `19.3.1`, Vite `8.3.5`, React Vite plugin `6.1.2` and Node.js 24. `package.json` and `package-lock.json` are authoritative. Run `npm ci` and `npm run build`; Nginx serves `frontend/dist/`.
+
+The table below retains historical target versions from the original design. Use dependency locks, Dockerfile digests and [implementation status](IMPLEMENTATION_STATUS.md) for actual deployed/tested versions.
 
 | Component | Target Version | Supported Range | Critical Configuration & Compatibility Flags |
 | :--- | :--- | :--- | :--- |
@@ -104,5 +106,5 @@ To prevent legal and licensing liabilities, all application dependencies are res
 | :--- | :--- | :--- |
 | **Python Libraries** | MIT, Apache 2.0, BSD-2-Clause, BSD-3-Clause, PSF | GPL v2/v3, AGPL v3, SSPL, Commons Clause, Elastic License |
 | **Container Base Images** | Alpine Linux (MIT / BSD / Apache / GPL for OS utilities) | Proprietary commercial bases, Non-commercial only |
-| **JavaScript / Web** | Vanilla native code (No external libraries) | Any third-party NPM runtime dependencies |
+| **JavaScript / Web** | Reviewed React/React DOM runtime and Vite build dependencies, tracked in `package-lock.json` | Unreviewed runtime CDN imports and untracked dependency changes |
 | **Infrastructure Tools** | Mozilla Public License (Terraform MPL v2.0) | Proprietary cloud orchestration tools |

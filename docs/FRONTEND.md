@@ -1,176 +1,143 @@
-# Frontend Technology, UI/UX & Client Architecture
+# React Frontend, UI/UX and Client Architecture
 
-**Design Revision 5 — 2026-10-26. Status: Production Architecture Specification.** This document provides the engineering specifications for the client-side presentation layer, native ES6 module architecture, DOM sanitization pipeline, and connection resilience state machine for Baatchit.
+**Updated: 28 October 2026.** Baatchit uses React 19 and Vite 8 for its browser interface. This guide describes the implemented client. It supersedes the earlier native DOM renderer; the WebSocket protocol and backend architecture are unchanged.
 
----
+## 1. Technology and build
 
-## 1. Client Architecture & Modular Design
+| Layer | Implementation |
+| --- | --- |
+| Presentation | React and React DOM 19.3.1, JavaScript/JSX |
+| Build and development | Vite 8.3.5, React plugin 6.1.2, Node.js 24 |
+| Styling | Existing responsive CSS in `frontend/css/style.css` |
+| Transport | Native browser WebSocket using `chat.v1` |
+| Shared client logic | Framework-independent protocol parser, connection manager and memory store |
+| Dependency management | Exact direct versions in `package.json` and integrity hashes in `package-lock.json` |
+| Production serving | Vite emits `frontend/dist/`; an unprivileged Nginx container serves the output |
 
-The frontend executes natively in the browser without third-party frameworks, build-step transpilations, or external CDN dependencies. It is structured into five cohesive ES6 modules:
+React adds component composition, controlled form fields and lifecycle cleanup. It also introduces a build step and a larger browser bundle. Dependencies are bundled into same-origin assets; the page does not load React from a third-party CDN. Node is used during development/build and is absent from the final Nginx runtime stage.
 
-```mermaid
+## 2. Component and module boundaries
+
+~~~mermaid
 flowchart TD
-    subgraph BrowserRuntime["Browser Client Runtime (Vanilla ES6)"]
-        App["app.js<br/><i>[App Orchestrator]</i><br/>DOM listener binding, user action dispatch"]
-        Connection["connection.js<br/><i>[Transport Manager]</i><br/>WebSocket lifecycle, generation IDs, full-jitter backoff"]
-        Protocol["protocol.js<br/><i>[Protocol Serializer]</i><br/>Envelope validation, raw frame decoding/encoding"]
-        State["state.js<br/><i>[State Store]</i><br/>Single source of truth: drafts, history, status"]
-        View["view.js<br/><i>[DOM Renderer]</i><br/>Sanitized rendering via textContent, DocumentFragment"]
-    end
+    Entry["main.jsx: React root and StrictMode"] --> App["App.jsx: interface composition"]
+    App --> Hook["useChat: subscription, actions and lifecycle"]
+    App --> Sidebar["Sidebar: editable display name"]
+    App --> Header["ChatHeader: status and connection actions"]
+    App --> Composer["Composer: draft, keyboard and send controls"]
+    App --> Messages["MessageList: text rendering and scroll anchoring"]
+    Hook --> Store["state.js: session, draft and bounded events"]
+    Hook --> Connection["connection.js: sockets and retry timers"]
+    Connection --> Parser["protocol.js: exact envelope and input rules"]
+    Connection --> Store
+    Store --> Hook
+~~~
 
-    App --> Connection
-    App --> State
-    App --> View
-    Connection --> Protocol
-    Connection --> State
-    State --> View
+| Source | Responsibility and invariant |
+| --- | --- |
+| [main.jsx](../frontend/src/main.jsx) | Creates the React root, imports CSS and enables StrictMode for development lifecycle checks. |
+| [App.jsx](../frontend/src/App.jsx) | Composes the sidebar, header, conversation and controlled composer. Retains semantic labels and stable IDs used by browser checks. |
+| [useChat.js](../frontend/src/useChat.js) | Creates one retained store/connection pair per mounted app, subscribes to state, dispatches actions, and releases sockets/timers on cleanup. |
+| [MessageList.jsx](../frontend/src/components/MessageList.jsx) | Renders strings as text, keys events by UUID and keeps the reading position stable when old messages are removed. |
+| [connection.js](../frontend/js/connection.js) | Owns the native socket, generation token, session timeout and retry timers. Late events from obsolete sockets cannot mutate current state. |
+| [protocol.js](../frontend/js/protocol.js) | Validates exact event fields, versions, identities and timestamps; normalizes outgoing plain text. |
+| [state.js](../frontend/js/state.js) | Retains session status, draft and at most 500 events. Nothing is persisted to localStorage or a database. |
+| [vite.config.js](../frontend/vite.config.js) | Defines loopback dev/preview servers, optional WebSocket proxy, CSP for production preview and static build output. |
 
-    classDef mod fill:#1e293b,stroke:#3b82f6,stroke-width:2px,color:#f8fafc;
-    class App,Connection,Protocol,State,View mod;
-```
+The hook uses [React's `useSyncExternalStore`](https://react.dev/reference/react/useSyncExternalStore) to subscribe to the existing state module. Store snapshots retain object identity until an update. React does not maintain a second copy of the message history or transport state.
 
-### Module Responsibilities & Boundary Invariants
+Most UI components are functions. The message list uses [`getSnapshotBeforeUpdate`](https://react.dev/reference/react/Component#getSnapshotBeforeUpdate) to measure a retained visible message before React changes the DOM. After the update, it restores that message's relative position. Fractional scroll rounding is carried forward to prevent drift over repeated evictions; native scroll anchoring is disabled for this container.
 
-| Module | Primary Responsibility | Critical Invariant & Security Constraint |
-| :--- | :--- | :--- |
-| `app.js` | Top-level lifecycle management and UI event routing. | Connects user interactions to transport calls; never performs direct DOM mutations. |
-| `connection.js` | Encapsulates native `WebSocket` instance, retry timers, and generation IDs. | Owns connection generation tokens; silently discards late callbacks from obsolete sockets. |
-| `protocol.js` | Parses inbound JSON envelopes and validates schemas; serializes outbound plain text. | Validates `schema_version: 1` and expected fields before passing data to state; rejects malformed events. |
-| `state.js` | Single source of truth for UI state: active session, connection status, drafts, message buffer. | Bounded memory: caps displayed history at 500 entries (FIFO eviction); preserves drafts across reconnects. |
-| `view.js` | Renders DOM updates using `textContent` and `DocumentFragment` batching. | **Strict XSS Defense:** Zero usage of `innerHTML`, `outerHTML`, or raw HTML injection; preserves user reading scroll. |
+## 3. Connection lifecycle and message flow
 
----
+1. The app creates a temporary name such as `guest_1234abcd`.
+2. The effect connects to the current page host at `/ws/<encoded-name>`, using `ws:` for HTTP and `wss:` for HTTPS.
+3. The socket requests `chat.v1`. The composer remains disabled until a valid first `session` event matches the requested name.
+4. The user edits a controlled textarea. Enter submits, Shift+Enter adds a newline, and IME composition does not accidentally submit.
+5. The client validates the draft and sends plain text. A successful `send()` clears the draft and shows an unconfirmed-delivery notice.
+6. Broadcast events enter the store and render through React. The sender's event comes back through the backend/broker path; there is no separate optimistic echo.
+7. Disconnecting disables the composer while preserving the draft and current in-memory history.
 
-## 2. Browser Connection Lifecycle & Resilient State Machine
+The display-name input has its own editable value. Submitting a valid name replaces the socket session, while the current draft remains in the store. An unsubmitted name edit does not silently change the connected identity.
 
-```mermaid
-stateDiagram-v2
-    [*] --> DISCONNECTED: Initial Page Load
-    DISCONNECTED --> CONNECTING: User Opens Page / Auto-Connect
-    CONNECTING --> CONNECTED: Subprotocol chat.v1 Negotiated & Session Envelope Received
-    CONNECTING --> RETRY_WAIT: Handshake Failed (HTTP 4xx/5xx or Network Error)
-    
-    CONNECTED --> DRAINING_RECONNECT: Received Close Code 1012 (Service Restart)
-    CONNECTED --> RETRY_WAIT: Network Drop / Close 1011 (Error) / Close 1013 (Rate Limit)
-    CONNECTED --> TERMINATED_POLICY: Close Code 1003 / 1007 / 1008 / 1009
-    CONNECTED --> DISCONNECTED: Clean User Disconnect (Close Code 1000)
+The effect cleanup removes page listeners, stops the connection and cancels timers. This also handles StrictMode's development setup/cleanup cycle and hot refresh. Page hiding closes the socket; restoration from the browser's back/forward cache reconnects it. The connection's generation guard prevents old callbacks from updating a replacement session.
 
-    DRAINING_RECONNECT --> CONNECTING: Immediate Jittered Reconnect (0-500ms)
-    RETRY_WAIT --> CONNECTING: Exponential Backoff Timer Expires (Attempts < 10)
-    RETRY_WAIT --> PAUSED: Max Retries Exhausted (Attempts >= 10)
-    
-    PAUSED --> CONNECTING: User Clicks "Reconnect" Button
-    TERMINATED_POLICY --> [*]: Fatal Error: Manual Resolution Required
-```
+### Reconnect policy
 
-### Full Jitter Exponential Backoff Algorithm
-To prevent thundering herds from swamping backend replicas during a rolling restart or node recovery, `connection.js` applies **Exponential Backoff with Full Jitter**:
+| Condition | Behavior |
+| --- | --- |
+| Retryable close/network failure | Full jitter: random delay below `min(15,000 ms, 500 ms × 2^attempt)` |
+| Server restart, code `1012` | Short jitter between 0 and 500 ms |
+| Retry budget exhausted | Pause after ten attempts; expose manual Reconnect |
+| Stable session | Reset retry count after 30 seconds |
+| Codes `1000` / `1001` | Stop automatic retry; allow manual reconnect |
+| Codes `1003` / `1007` / `1008` / `1009` | Stop retry and show policy/protocol guidance |
+| Invalid or out-of-order event | Close the session, cancel timers and show Protocol error |
 
-$$t_{\text{sleep}} = \text{random}\left(0, \, \min\left(T_{\text{max}}, \, T_{\text{base}} \times 2^{\text{attempt}}\right)\right)$$
+A missed broadcast is unrecoverable in the current ephemeral design. Draft retention means text remains in that tab; it is not automatically resent and does not survive a full page reload.
 
-Where:
-* $T_{\text{base}} = 0.5\text{ seconds}$
-* $T_{\text{max}} = 15.0\text{ seconds}$
-* $\text{attempt} \in [0, 10]$
+## 4. Input handling and safe rendering
 
-```javascript
-// connection.js - Resilient Backoff Implementation
-function calculateBackoffDelay(attempt) {
-    const base = 0.5;
-    const max = 15.0;
-    const exponential = Math.min(max, base * Math.pow(2, attempt));
-    return Math.random() * exponential * 1000; // milliseconds
-}
-```
+- Usernames match `[A-Za-z0-9_-]{1,32}`. They are display labels, not authenticated identities.
+- Raw outgoing input is limited to 16,384 UTF-8 bytes; invalid lone surrogates are rejected.
+- CRLF and CR normalize to LF. Only boundary ASCII space, tab, CR and LF are trimmed; there is no NFC/NFKC normalization.
+- Forbidden control characters are rejected. Tab and LF are allowed.
+- Normalized text is limited to 2,000 Unicode code points. The character counter uses code points rather than JavaScript UTF-16 code units.
+- Blank normalized input is not sent. Sending also requires a ready session and an acceptable browser transport buffer.
+- Message bodies, names and system notices render as React text children. Never pass them through `dangerouslySetInnerHTML` or build HTML strings from received data.
 
-* **Session Reset Rule:** The retry counter resets to 0 only after maintaining an active `CONNECTED` state for at least 30 consecutive seconds.
-* **Terminal Paused State:** After 10 consecutive failed connection attempts, the client enters `PAUSED`. It retains the user's uncommitted message draft and displays a prominent "Reconnect" action.
+Input validation and safe rendering have separate jobs: validation enforces the protocol; text rendering keeps HTML-like content inert. Future Markdown, links or attachments require a separate rendering/security design.
 
----
+The gateway CSP permits same-origin scripts, styles, images and connections; it excludes inline scripts, third-party resources and embedding. Vite production preview applies the same policy. Development uses Vite's refresh client, so it is not a substitute for checking the built output. Favicon assets are emitted as files instead of `data:` URLs.
 
-## 3. Strict Input Normalization & XSS Defense Pipeline
+## 5. UI/UX and accessibility
 
-Incoming text from the user input textarea undergoes strict client-side validation before dispatch, matching the backend validation pipeline:
+| Area | Implemented behavior |
+| --- | --- |
+| Desktop | Sidebar with room/name information; conversation, status and composer in the main pane |
+| Mobile | Compact top bar and stacked chat layout; checked at 390 × 844 pixels |
+| Visual design | Dark surfaces, mint accent, existing CSS tokens and responsive breakpoints |
+| Status | Connecting, Connected, Reconnecting, Paused, Disconnected and Protocol error states |
+| Composer | Controlled draft, Unicode counter, disabled send before session or for blank text |
+| Reading continuity | Follow the bottom when pinned; preserve the visible anchor while reading older messages |
+| New-message action | Show a jump button when messages arrive while scrolled up |
+| Memory bound | Remove old events beyond 500; retained events keep stable React keys |
+| Accessibility basics | Semantic landmarks, explicit field labels, skip link, polite live status/log, visible keyboard focus |
+| Motion | Respect reduced-motion preferences |
 
-```mermaid
-flowchart TD
-    Raw["User Textarea Input"] --> CRLF["Normalize Newlines (\r\n and \r to \n)"]
-    CRLF --> Trim["Trim Boundary ASCII Whitespace (Space, Tab, \n)"]
-    Trim --> Control["Verify Zero Forbidden Control Codes (ASCII 0-31 except \n)"]
-    Control --> CodePoints{"Code Point Count >= 1 and <= 2000?"}
-    CodePoints -->|No: Empty or Exceeds 2000| Reject["Block Submission & Show Character Counter Alert"]
-    CodePoints -->|Yes: Valid Payload| UTF8{"UTF-8 Byte Length <= 16,384 bytes?"}
-    UTF8 -->|No: Exceeds 16 KiB| Reject
-    UTF8 -->|Yes: Valid Frame| Dispatch["Transmit Raw UTF-8 Text Frame over WebSocket"]
+The current color tokens include `--bg: #101722`, `--line: #283241`, `--muted: #a1aec0`, `--text: #edf2f7` and `--accent: #a9e8cd`. CSS is the source of truth. The mobile browser check covers visibility and horizontal overflow; it is not a complete accessibility or cross-browser audit.
 
-    classDef pass fill:#064e3b,stroke:#059669,stroke-width:2px,color:#ffffff;
-    classDef fail fill:#7f1d1d,stroke:#dc2626,stroke-width:2px,color:#ffffff;
-    class CRLF,Trim,Control,CodePoints,UTF8,Dispatch pass;
-    class Reject fail;
-```
+## 6. Local development and production delivery
 
-### Precise Code Point Accounting
-JavaScript string `.length` counts UTF-16 code units, which miscounts 4-byte Unicode characters (e.g., emojis such as 🚀 count as 2 code units). The client enforces length on **Unicode code points**:
+Run from the repository root:
 
-```javascript
-// Correct code point counting supporting surrogate pairs
-function getCodePointLength(text) {
-    return Array.from(text).length;
-}
-```
+~~~bash
+npm ci
+npm run dev
+~~~
 
----
+Open **http://127.0.0.1:8080**. The dev server binds to loopback, supports hot refresh and fails when the chosen port is occupied. This starts only the frontend, so the chat remains disconnected without a backend. Windows PowerShell can use `npm.cmd` when execution policy blocks `npm.ps1`.
 
-## 4. UI/UX Design System & Layout Specification
+Optionally set `BAATCHIT_WS_TARGET=http://127.0.0.1:8000` before starting Vite to proxy `/ws` to an independently running backend. The backend needs Redis and must allow the exact browser Origin. This variable neither starts those services nor changes the production WebSocket URL.
 
-```text
-+-------------------------------------------------------------------+
-|  Baatchit               [● Connected]           [Theme: Dark]     |
-|  Display Name: Guest_a92f                       [Disconnect]      |
-+-------------------------------------------------------------------+
-|  [21:15:30] [System] Welcome to Baatchit! Messages are ephemeral.  |
-|  [21:15:32] [alice_99]: Hello, distributed real-time mesh!        |
-|  [21:15:35] [bob_12]: Hi Alice! Running on Kubernetes K3s.       |
-|                                                                   |
-|                                              [↓ New Messages]     |
-+-------------------------------------------------------------------+
-|  [Connection Notice: Reconnecting in 2.4s... (Draft Preserved)]   |
-|  +-------------------------------------------------------------+  |
-|  | Write a message... (Shift+Enter for newline)                |  |
-|  +-------------------------------------------------------------+  |
-|  Character Count: 42 / 2000                       [Send Message]  |
-+-------------------------------------------------------------------+
-```
+~~~bash
+npm run build
+npm run preview
+~~~
 
-### Design Tokens & CSS Variables (`css/style.css`)
-```css
-:root {
-    --color-canvas: #0f172a;
-    --color-surface: #1e293b;
-    --color-surface-border: #334155;
-    --color-text: #f8fafc;
-    --color-text-muted: #94a3b8;
-    --color-accent: #3b82f6;
-    --color-accent-hover: #2563eb;
-    --color-status-connected: #10b981;
-    --color-status-reconnecting: #f59e0b;
-    --color-status-error: #ef4444;
-    
-    --font-stack: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-    --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-    
-    --radius-control: 8px;
-    --radius-panel: 12px;
-    --content-max-width: 960px;
-}
-```
+Stop the dev server before preview, or choose `npm run preview -- --port 8081`. Vite emits content-hashed files under `frontend/dist/assets/` and a generated HTML entry. The [Vite production build](https://vite.dev/guide/build) output can be served statically; raw JSX source cannot.
 
----
+The Dockerfile runs `npm ci` and `npm run build` in a pinned Node 24 build stage, then copies only the generated output into the existing Nginx runtime stage. Kubernetes continues running the same frontend Deployment and Service. Nginx keeps HTML `no-store` and conservatively revalidates assets with `no-cache`.
 
-## 5. Accessibility (WCAG 2.2 AA) & Assistive Technology Standards
+CI installs locked npm dependencies, runs the client tests and builds the bundle before the existing full-stack checks. Changes to npm dependencies require a reviewed lockfile update. Never embed credentials in browser source or `VITE_*` variables.
 
-1. **Semantic Landmarks:** Structure uses `<header>`, `<main>`, `<section>`, and `<footer>` elements with distinct ARIA roles.
-2. **Accessible Live Regions:** The message log is assigned `role="log"` with `aria-live="polite"` and `aria-atomic="false"`. Screen readers announce newly arrived messages without interrupting user speech.
-3. **Contrast Compliance:** All text tokens maintain a minimum contrast ratio of **4.5:1** against surface backgrounds; UI borders maintain **3:1** against the canvas.
-4. **Keyboard Walkthrough:** Full keyboard navigation support (`Tab`, `Shift+Tab`, `Enter` to submit, `Shift+Enter` for newlines). Focus indicators utilize a 2px high-contrast outline with a 2px offset (`outline: 2px solid var(--color-accent); outline-offset: 2px;`).
-5. **Reduced Motion:** Adheres to `@media (prefers-reduced-motion: reduce)`, disabling all transitions and micro-animations.
+## 7. Verification and remaining scope
+
+- `npm test`: six existing protocol, normalization, socket-generation, retry and history-cap checks.
+- `npm run build`: production JSX/module compilation and asset generation.
+- `tests/browser/test_frontend.py`: three Chromium checks with intercepted WebSockets covering literal message content, Unicode counting, IME/keyboard handling, session gating, protocol failures, draft retention, rename, mobile layout, history eviction and scrolling.
+- `tests/browser/test_ui.py`: the existing real two-tab backend/Redis browser flow, requiring the full stack.
+
+The React checks run against both Vite development and production preview. Screenshots are generated under ignored `artifacts/react/`. Mocked WebSockets validate browser behavior only. The older 42-test and 7,500-delivery results remain dated baseline evidence; see [Implementation status](IMPLEMENTATION_STATUS.md) for verification boundaries.
+
+There are still no accounts, rooms beyond the public general room, private conversations, durable history, receipts, typing indicators, media or end-to-end encryption. React changes the presentation/build layer; those features require additional product and backend work.

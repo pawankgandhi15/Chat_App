@@ -137,7 +137,7 @@ flowchart TD
 1. **Unicode NFC Normalization:** All text is canonicalized using `unicodedata.normalize('NFC', text)`. This guarantees consistent byte representations for multi-byte characters and combined diacritics.
 2. **Code Point Accounting:** Limits are enforced on **Unicode code points** ($\text{len}(text)$ in Python 3), not UTF-8 byte lengths. A 2,000-character message consisting entirely of 4-byte emojis ($8,000\text{ bytes}$) is valid, whereas a 2,001-character ASCII string is rejected.
 3. **Control Code Stripping:** Control characters in ranges `[\x00-\x09]`, `[\x0b-\x1f]`, and `\x7f` are strictly stripped. Line feeds (`\n` / `\x0a`) are preserved up to a maximum of 20 consecutive newlines to prevent DOM layout denial-of-service.
-4. **XSS Neutralization:** Client-side rendering exclusively assigns received strings to the `textContent` property of DOM elements. The use of `innerHTML`, `outerHTML`, or `eval()` is strictly prohibited.
+4. **XSS Neutralization:** React components render received strings as escaped text children. The use of `dangerouslySetInnerHTML`, `innerHTML`, `outerHTML`, or `eval()` with user content is prohibited.
 
 ---
 

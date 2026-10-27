@@ -4,6 +4,13 @@ This file records actual repository changes. Planned application features remain
 
 ## Unreleased
 
+### React frontend — 2026-10-28
+
+- Converted the presentation layer to React components while retaining chat.v1 validation, socket generation guards, retry limits and the bounded draft/message store.
+- Added Vite development and production builds, exact npm dependencies/lockfile, a Node build stage for the Nginx image, and CI installation/build steps.
+- Preserved the responsive design, safe text rendering, session-gated composer, IME handling and reading position during history eviction.
+- Added browser checks with intercepted WebSockets and refreshed frontend setup/architecture documentation. Earlier full-stack performance evidence remains dated to its original run.
+
 ### Baatchit project identity — 2026-10-27
 
 - Renamed the app to Baatchit across the browser title, wordmark, favicon, package metadata, guides, diagrams, infrastructure names, scripts and test references.

@@ -25,7 +25,9 @@ jobs:
       - run: python -m pip install --require-hashes -r requirements-dev.lock
       - run: python -m compileall -q backend scripts tests
       - run: python -m pytest tests/unit -q
-      - run: node --test tests/frontend/*.test.js
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
       - run: bash scripts/install-ci-tools.sh
       - run: echo "$PWD/.local/bin" >> "$GITHUB_PATH"
       - run: python scripts/check_manifests.py

@@ -2,6 +2,14 @@
 
 **Recorded: 2026-10-27.** The project now has a runnable application and local Kubernetes deployment. Historical design guides describe broader acceptance goals; this file records what has actually been implemented and checked.
 
+## React frontend migration — 2026-10-28
+
+- Replaced the native DOM renderer with React 19 components and a Vite 8 build. Kept the existing wire parser, connection state machine and bounded memory store.
+- Added lifecycle cleanup, React text rendering, controlled forms and scroll anchoring when older messages are evicted. The native DOM renderer and entrypoint were removed.
+- Added an exact-version npm lockfile, loopback-only dev/preview commands, a digest-pinned Node build stage and CI install/build steps. Nginx continues serving the generated static bundle.
+- Six existing JavaScript tests and three new Chromium tests with intercepted WebSockets passed locally. These cover session gating, malformed events, inert message content, keyboard/IME input, drafts across reconnect/rename, the 500-message cap, reading-position preservation and mobile layout.
+- The production bundle was built and checked separately under the gateway CSP. These mocked browser checks do not establish real Redis/backend delivery. Full Docker/Kubernetes, image scans and load checks have not been rerun for the React migration; the dated baseline below remains historical evidence.
+
 ## Delivered
 
 - Responsive anonymous chat UI with safe text rendering, exact `chat.v1` event validation, session-gated sending, bounded history, retry limits and preserved unsent drafts.
@@ -66,7 +74,7 @@ The repository contains implementation for these workflows, but an implementatio
 - `ALLOWED_ORIGINS` is comma-separated text; no automatic .env loader.
 - Browser retries use the frontend specification's 500 ms base / 15-second cap.
 - Redis output buffers use 4 MiB hard / 1 MiB soft for 10 seconds to fit the container budget.
-- Asset names are stable, so assets revalidate instead of using immutable long-lived caching.
+- React/Vite now emits content-hashed assets. Nginx retains conservative `no-cache` asset revalidation and `no-store` HTML; the original stable filenames are no longer used.
 - Gateway/frontend/Redis use Recreate; the project does not claim zero-downtime full releases.
 - Metrics are private per-process Prometheus series. A persistent metrics server/dashboard and cloud alert delivery are not bundled.
 - Single-node Kubernetes demonstrates replica messaging but cannot tolerate loss of the host.

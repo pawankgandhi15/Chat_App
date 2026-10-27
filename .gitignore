@@ -11,6 +11,7 @@ htmlcov/
 .local/
 artifacts/
 node_modules/
+frontend/dist/
 .terraform/
 *.tfstate*
 *.tfplan

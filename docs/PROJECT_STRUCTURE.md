@@ -31,18 +31,24 @@ Baatchit/
 │   ├── requirements.in                   # Direct high-level dependencies
 │   ├── requirements.lock                 # Pinned, hashed production dependency lockfile
 │   └── Dockerfile                        # Multi-stage rootless OCI container build
-├── frontend/                             # Native Vanilla ES6 Browser Client
-│   ├── index.html                        # Semantic HTML5 chat interface (No external CDNs)
+├── package.json                          # React/Vite dependencies and npm scripts
+├── package-lock.json                     # Exact npm dependency graph and integrity hashes
+├── frontend/                             # React browser client and Vite build
+│   ├── index.html                        # HTML shell and React entrypoint (no external CDNs)
+│   ├── vite.config.js                    # Loopback dev/preview, optional WS proxy, static build
+│   ├── src/
+│   │   ├── main.jsx                      # React root and StrictMode
+│   │   ├── App.jsx                       # Sidebar, header and controlled composer
+│   │   ├── useChat.js                    # Store subscription, socket lifecycle and actions
+│   │   └── components/MessageList.jsx    # Safe text rendering and scroll preservation
 │   ├── css/
 │   │   └── style.css                     # Responsive CSS3 styles & dark mode themes
 │   ├── js/
-│   │   ├── app.js                        # App orchestrator, DOM event listener binding
 │   │   ├── protocol.js                   # Client envelope parsing & outbound text encoding
 │   │   ├── connection.js                 # WebSocket wrapper, retry loop with full jitter
-│   │   ├── state.js                      # Single source of truth for UI state & draft retention
-│   │   └── view.js                       # Sanitized DOM rendering via textContent
+│   │   └── state.js                      # Single source of truth for UI state & draft retention
 │   ├── nginx.conf                        # Unprivileged static file server configuration
-│   └── Dockerfile                        # Static asset container build
+│   └── Dockerfile                        # Node builds frontend/dist; Nginx serves the bundle
 ├── gateway/                              # Public Edge Reverse Proxy
 │   ├── nginx.conf                        # TLS termination, WSS proxy, security blockades
 │   └── Dockerfile                        # Gateway container build
@@ -132,7 +138,7 @@ flowchart TD
 ```
 
 * **Backend Module Isolation:** Business logic in `app/` is partitioned strictly: `limits.py` has zero network I/O; `validation.py` is pure computation; `broker.py` encapsulates Redis connectivity; `sessions.py` owns the socket registry.
-* **Frontend Sandbox Isolation:** The browser client executes natively. No code in `frontend/` may import external npm packages, connect to third-party CDNs, or retain unsanitized user inputs.
+* **Frontend boundaries:** React and reviewed npm dependencies are bundled by Vite. The browser uses same-origin static assets and WebSockets; secrets never belong in frontend source or `VITE_*` variables. Render received strings as React text children, with no raw HTML injection. Keep protocol/store/connection modules independent of UI components.
 * **Declarative Manifest Separation:** `k8s/base/` contains zero secrets and zero environment-specific hostnames. All environment differences reside in `k8s/overlays/`.
 
 ---

@@ -297,15 +297,16 @@ sequenceDiagram
 
 ## 7. Browser Client Architecture & Resilient State Machine
 
-The client runtime is structured into five native ES6 modules executing in the browser sandbox without third-party frameworks:
+The React frontend uses Vite for bundling and preserves framework-independent connection, protocol and state modules:
 
 | Module | Responsibilities & Design Invariants |
 | :--- | :--- |
-| `app.js` | Top-level orchestrator; binds DOM event listeners; lifecycle coordination. |
+| `src/main.jsx` and `src/App.jsx` | React root, semantic UI components and controlled forms. |
+| `src/useChat.js` | Store subscription via `useSyncExternalStore`, actions, socket/timer cleanup and reconnect lifecycle. |
 | `protocol.js` | Strict envelope parser; validates incoming JSON schemas; constructs outgoing text frames. |
 | `connection.js` | Manages raw `WebSocket` instance; encapsulates retry timers, heartbeats, and generation IDs. |
 | `state.js` | Single source of truth for UI state: active session, drafts, displayed messages (capped at 500). |
-| `view.js` | DOM renderer using `textContent` and `DocumentFragment` batching; zero `innerHTML` usage. |
+| `src/components/MessageList.jsx` | Escaped React text children, stable event keys and pre-update scroll snapshots for bounded-history eviction. |
 
 ### Exponential Backoff with Full Jitter
 To prevent thundering herd storms against surviving backend replicas during a rolling restart or node recovery, `connection.js` executes exponential backoff with full jitter:

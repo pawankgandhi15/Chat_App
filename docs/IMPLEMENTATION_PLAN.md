@@ -11,7 +11,7 @@
 ```mermaid
 flowchart TD
     P0["Phase 0: Foundations & Dependency Locks<br/><i>(Pin Python, FastAPI, Redis, K3s, Terraform)</i>"] --> P1["Phase 1: Backend Core Engine<br/><i>(Pydantic schemas, TokenBucket, AsyncIO Writer)</i>"]
-    P0 --> P2["Phase 2: Frontend Client<br/><i>(Vanilla ES6 modules, safe rendering, backoff)</i>"]
+    P0 --> P2["Phase 2: Frontend Client<br/><i>(React UI, safe rendering, backoff)</i>"]
     P1 --> P3["Phase 3: Local Kubernetes (k3d)<br/><i>(Manifests, Services, Probes, NetworkPolicies)</i>"]
     P2 --> P3
     P3 --> P4["Phase 4: Release Automation & CI/CD<br/><i>(GitHub Actions, Trivy, Syft, Cosign)</i>"]
@@ -50,12 +50,12 @@ flowchart TD
 
 ---
 
-### Phase 2: Frontend Vanilla ES6 Client
-* **Scope:** Implement the native browser presentation tier without third-party frameworks.
+### Phase 2: React frontend (migrated 2026-10-28)
+* **Scope:** Implement the React presentation tier with a Vite production build, preserving the existing WebSocket contract and client state rules.
 * **Key Tasks:**
   1. Structure HTML5 layout (`frontend/index.html`) with semantic landmarks and WCAG 2.2 AA ARIA live regions.
   2. Implement CSS3 design tokens (`frontend/css/style.css`) with responsive mobile flexbox and dark mode.
-  3. Implement ES6 modules: `protocol.js`, `connection.js` (full jitter backoff), `state.js` (500-message cap), and `view.js` (`textContent` rendering).
+  3. Retain `protocol.js`, `connection.js` (full jitter backoff) and `state.js` (500-message cap). Use React components in `frontend/src/` for escaped text rendering, controlled forms and scroll preservation; build using Vite.
 * **Exit Gate:** Zero XSS execution on malicious payloads; automated Playwright browser tests pass.
 
 ---

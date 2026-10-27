@@ -12,7 +12,7 @@
 | **ADR-02** | Multi-Replica Backend | Run 2 FastAPI backend Pods with 1 Uvicorn worker each. | Proves cross-process fan-out; eliminates multi-thread GIL contention. | Does not provide host-level high availability. |
 | **ADR-03** | Ephemeral Broker | Redis 7 in-memory Pub/Sub via `global_chat_channel`. | Lightweight memory ($< 35\text{ MiB}$); sub-millisecond event dispatch. | At-most-once delivery; zero message replay after disconnect. |
 | **ADR-04** | Ingress & Reverse Proxy | Nginx Gateway terminates TLS and proxies WebSockets. | Centralized TLS termination; isolates backend from public internet. | Singleton gateway is a single point of failure in baseline. |
-| **ADR-05** | Native Presentation | Semantic HTML5, CSS3, native Vanilla ES6 JavaScript. | Zero build steps; zero external CDNs; eliminates XSS via `textContent`. | Manual DOM state management without framework abstractions. |
+| **ADR-05** | React presentation (updated 2026-10-28) | React 19, Vite 8, semantic JSX and CSS; existing protocol/store modules retained. | Component composition, controlled inputs and lifecycle cleanup; no runtime CDN dependency. | Adds a Node build step, npm dependency maintenance and a larger browser bundle. |
 | **ADR-06** | Infrastructure as Code | Terraform 1.10+ with AWS Provider and S3 backend. | Declarative cloud management; native S3 locking (`use_lockfile`). | Requires manual verification of destroyed residual assets. |
 | **ADR-07** | Off-Node Builds & Tests | Image builds and load generators run off the AWS node. | Conserves 2-vCPU / 4-GiB resources strictly for runtime workloads. | Requires developer workstation or external CI runner. |
 | **ADR-08** | Testing Parity | Local testing via k3d; automated Playwright browser tests. | Matches production Kubernetes API locally without cloud charges. | Docker networking differs from AWS EC2 public WAN routing. |
@@ -60,6 +60,6 @@
 | **RSK-03** | Financial | Runaway cloud charges exceed $100 credit allocation. | Low | High | Minimal resource set (\$39.79/mo gross); AWS Budgets alerts at 50%, 75%, 90%; mandatory reserve. |
 | **RSK-04** | Messaging | Redis broker failure causes silent message loss. | Low | Medium | Generational nonce watchdog prober fails readiness within 10s; clients disconnect and back off. |
 | **RSK-05** | Delivery | Bad container release introduces syntax error or regression. | Low | High | Cryptographically signed release bundles; automated 10-minute rollback runbook (`rollback.sh`). |
-| **RSK-06** | Security | Malicious user injects XSS payloads into public chat. | High | High | Strict `textContent` DOM rendering; zero `innerHTML`; Content Security Policy headers. |
+| **RSK-06** | Security | Malicious user injects XSS payloads into public chat. | High | High | Escaped React text children; no `dangerouslySetInnerHTML`; Content Security Policy headers. |
 | **RSK-07** | Network | Unintended public exposure of Redis or internal metrics. | Low | Critical | Default-deny Kubernetes `NetworkPolicies`; security group blocks ports 6379, 8000, 6443 publicly. |
 | **RSK-08** | Supply Chain | Compromised third-party dependency introduces backdoor. | Low | Critical | Pinned hash lockfiles; Trivy CVE scans gate build; Cosign cryptographic signatures. |

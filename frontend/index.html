@@ -1,31 +1,17 @@
 <!doctype html>
-<html lang="en"><head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-<meta name="color-scheme" content="dark"><meta name="theme-color" content="#101722">
-<title>Baatchit · Live conversations</title>
-<link rel="icon" href="/assets/icon.svg" type="image/svg+xml">
-<link rel="stylesheet" href="/assets/style.css"><script type="module" src="/assets/js/app.js"></script>
-</head><body>
-<a class="skip-link" href="#message">Skip to message</a>
-<div class="app-shell">
-<aside class="sidebar" aria-label="Room information">
-<a class="brand" href="/"><span class="brand-mark" aria-hidden="true">b.</span><span>Baatchit</span></a>
-<p class="eyebrow">A little space to connect</p>
-<div class="room"><span class="hash" aria-hidden="true">#</span><div><strong>general</strong><small>One room. Everyone welcome.</small></div><span class="room-dot"></span></div>
-<section class="profile" aria-labelledby="profile-title"><h2 id="profile-title">Your display name</h2>
-<form id="profile-form"><label class="sr-only" for="username">Display name</label><input id="username" name="username" maxlength="32" pattern="[A-Za-z0-9_-]{1,32}" required autocomplete="off" spellcheck="false"><button type="submit" class="secondary">Update name</button></form>
-<p class="micro">A temporary name, not a verified identity.</p></section>
-<div class="sidebar-bottom"><span class="small-icon" aria-hidden="true">◎</span><h2>Here for the moment.</h2><p>Messages are live and temporary. There’s no account, inbox, or saved history.</p><span class="version">CHAT.V1 · LIVE CONVERSATIONS</span></div>
-</aside>
-<main class="chat">
-<header class="chat-header"><div><div class="title-row"><span class="hash" aria-hidden="true">#</span><h1>general</h1><span class="channel-tag">PUBLIC ROOM</span></div><p>A shared conversation, happening now.</p></div>
-<div class="connection-controls"><span id="status" class="status" role="status" aria-live="polite">Connecting</span><button id="reconnect" class="secondary" type="button" hidden>Reconnect</button><button id="disconnect" class="quiet" type="button">Disconnect</button></div></header>
-<section class="conversation" aria-label="Conversation">
-<div class="welcome"><span class="welcome-symbol" aria-hidden="true">✳</span><p class="eyebrow">THE START OF SOMETHING</p><h2>Pull up a chair.</h2><p>Say hello, share a thought, or just listen.<br>Good conversations start with a simple message.</p><div class="welcome-rule"></div></div>
-<ol id="messages" class="messages" role="log" aria-label="Live messages" aria-live="polite" aria-relevant="additions" tabindex="0"></ol></section>
-<button id="new-messages" class="new-messages" type="button" hidden>New messages ↓</button>
-<footer class="composer-area"><p id="notice" class="notice" role="status" aria-live="polite">Waiting for a session…</p>
-<form id="message-form" class="composer"><label class="sr-only" for="message">Message general</label><textarea id="message" rows="2" placeholder="Message #general" aria-describedby="composer-help counter" disabled></textarea><button id="send" class="send" type="submit" disabled><span>Send</span><span aria-hidden="true">↗</span></button></form>
-<div class="composer-meta"><span id="composer-help"><kbd>Enter</kbd> to send · <kbd>Shift + Enter</kbd> for a new line</span><span id="counter">0 / 2,000</span></div>
-<p class="privacy-note">Live only. Messages missed while disconnected cannot be recovered. Never share sensitive information.</p></footer>
-</main></div></body></html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="dark">
+    <meta name="theme-color" content="#101722">
+    <meta name="description" content="Baatchit — a shared space for live, temporary conversations.">
+    <title>Baatchit · Live conversations</title>
+    <link rel="icon" href="/icon.svg" type="image/svg+xml">
+  </head>
+  <body>
+    <div id="root"></div>
+    <noscript>Enable JavaScript to use Baatchit's live chat.</noscript>
+    <script type="module" src="/src/main.jsx"></script>
+  </body>
+</html>

@@ -36,7 +36,7 @@ Before presenting the live demonstration, ensure the following prerequisites are
 * **Goal:** Demonstrate enterprise input sanitization and browser memory bounding.
 * **Execution Walkthrough:**
   1. Alice sends an XSS payload: `<script>alert('XSS Compromised')</script>`.
-  2. Observe that both browsers render the string as inert, harmless text via `textContent`. Zero alert dialogs trigger.
+  2. Observe that both browsers render the string as inert, harmless text through escaped React text children. Zero alert dialogs trigger.
   3. Alice sends a 4-byte astral Unicode emoji message: `"Testing code point math: 🚀🎉🔥"`.
   4. Show that character counters and backend validation accurately compute code point scalar values, not UTF-16 code units.
   5. Highlight the DOM message log: explain that displayed messages are capped at 500 nodes (FIFO eviction) to prevent browser memory exhaustion.

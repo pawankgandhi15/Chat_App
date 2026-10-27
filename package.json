@@ -1,1 +1,20 @@
-{"name":"baatchit-client","private":true,"type":"module","scripts":{"test":"node --test tests/frontend/*.test.js"}}
+{
+  "name": "baatchit-client",
+  "private": true,
+  "type": "module",
+  "engines": {"node": ">=24.0.0 <25"},
+  "scripts": {
+    "dev": "vite --config frontend/vite.config.js",
+    "build": "vite build --config frontend/vite.config.js",
+    "preview": "vite preview --config frontend/vite.config.js",
+    "test": "node --test tests/frontend/*.test.js"
+  },
+  "dependencies": {
+    "react": "19.3.1",
+    "react-dom": "19.3.1"
+  },
+  "devDependencies": {
+    "@vitejs/plugin-react": "6.1.2",
+    "vite": "8.3.5"
+  }
+}
