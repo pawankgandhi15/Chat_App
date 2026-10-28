@@ -4,6 +4,14 @@ This file records actual repository changes. Planned application features remain
 
 ## Unreleased
 
+### Accounts and persistent conversations — 2026-10-28
+
+- Added password registration/login, stable account IDs, revocable HttpOnly sessions, username search and account-bound direct conversations.
+- Added PostgreSQL/SQLAlchemy persistence with schema initialization, authorized history pagination, per-conversation sequence allocation and idempotent message saves. File-backed SQLite supports local development/tests.
+- Added saved-chat React screens, cookie-session restoration, separate drafts, older-history navigation and same-browser account-change guards. Redis/WebSocket hints refresh authorized HTTP history; periodic refresh repairs lost hints.
+- Added a separately managed PostgreSQL PVC/service/workload, database secrets/network policy, local migration step, updated release requirements and explicit confirmation before deleting a local cluster containing saved data.
+- Added persistence, authorization, concurrency, retry, browser and PostgreSQL CI checks. Local Docker/PostgreSQL/Kubernetes verification remains pending because Docker is stopped. See [Accounts and history](docs/ACCOUNTS_AND_HISTORY.md).
+
 ### Session-based direct messaging — 2026-10-28
 
 - Added `chat.v2`, ephemeral cross-replica presence snapshots and direct-message routing limited to the sender and selected recipient sessions; retained `chat.v1` public-room compatibility.

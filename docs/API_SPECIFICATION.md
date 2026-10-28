@@ -1,5 +1,7 @@
 # API & WebSocket Wire Specification
 
+The implemented account API (`/api/auth/*`, `/api/users`, `/api/conversations/*`) and `chat.accounts.v1` notification socket are specified in [Accounts and history](ACCOUNTS_AND_HISTORY.md#api-contract). The v1/v2 guest wire contract below remains separate.
+
 **Status: Production Architecture Specification. Baseline: Design Revision 5 (Reviewed 2026-10-26).**
 
 This document describes the original `chat.v1` protocol. For the implemented `chat.v2` direct-message extension, its exact fields, negotiation and security boundaries, see [Direct messaging](DIRECT_MESSAGING.md). Where this historical document describes v1-only behavior, v2 differs as specified there.

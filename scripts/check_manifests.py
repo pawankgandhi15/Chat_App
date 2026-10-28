@@ -35,7 +35,7 @@ def check():
             manifest = {"images": {d["metadata"]["name"]: d["spec"]["template"]["spec"]["containers"][0]["image"]
                                    for d in deployments},
                         "release_id": "RELEASE_REQUIRED", "origin": "PUBLIC_ORIGIN_REQUIRED",
-                        "secrets_required": ["redis-url", "redis-auth", "gateway-tls"]}
+                        "secrets_required": ["redis-url", "redis-auth", "gateway-tls", "database-url"]}
             validate_resources(objects, manifest)
         print(overlay + ": topology, namespace, volume/config references and permissions passed")
     print("Both overlays render successfully.")

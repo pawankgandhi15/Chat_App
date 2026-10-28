@@ -1,5 +1,7 @@
 # Configuration reference
 
+**Accounts extension:** `DATABASE_URL` or `DATABASE_URL_FILE` configures saved-chat storage; choose only one. `SESSION_DAYS` defaults to 7 (range 1–30). Public mode requires a PostgreSQL credential file. Kubernetes mounts the `database-url` Secret at `/etc/secrets/database/url`. Initialize schema v1 before startup; absent database settings preserve guest-only operation. See [Accounts and history](ACCOUNTS_AND_HISTORY.md#configuration-and-schema-setup) for full details and local SQLite commands.
+
 This reference describes the implemented code as of 2026-10-27. [Settings](../backend/app/settings.py), [Kubernetes defaults](../k8s/base/kustomization.yaml) and the [API specification](API_SPECIFICATION.md) are the relevant implementation contracts. Settings are read once at startup and validated before the server starts.
 
 ## Backend settings

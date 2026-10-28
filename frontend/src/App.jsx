@@ -1,9 +1,10 @@
-import {useMemo, useState} from "react";
+import {useCallback, useEffect, useMemo, useState} from "react";
+import {AccountChat, AuthForm, api} from "./AccountChat.jsx";
 import {useChat} from "./useChat.js";
 import {MessageList} from "./components/MessageList.jsx";
 import {Icon} from "./components/Icon.jsx";
 
-function Sidebar({initialUsername, onName, state, contacts, onSelect}) {
+function Sidebar({initialUsername, onName, state, contacts, onSelect, onSignIn}) {
   const [name, setName] = useState(initialUsername);
   return (
     <aside className="sidebar" aria-label="Room information">
@@ -44,6 +45,7 @@ function Sidebar({initialUsername, onName, state, contacts, onSelect}) {
       </div>
 
       <section className="profile" aria-labelledby="profile-title">
+        <button className="account-invite secondary" onClick={onSignIn}>Sign in for saved chats</button>
         <div className="profile-heading">
           <span className="profile-avatar" aria-hidden="true">{(name || "?").slice(0, 2).toUpperCase()}</span>
           <div><h2 id="profile-title">Your display name</h2><p>Visible to everyone in the room</p></div>
@@ -111,7 +113,7 @@ function Composer({state, peer, onDraft, onSend}) {
   );
 }
 
-export function App() {
+function GuestApp({onSignIn}) {
   const chat = useChat();
   const contacts = useMemo(() => {
     const map = new Map();
@@ -128,7 +130,7 @@ export function App() {
     <>
       <a className="skip-link" href="#message">Skip to message</a>
       <div className="app-shell">
-        <Sidebar initialUsername={chat.initialUsername} onName={chat.connect} state={chat.state} contacts={contacts} onSelect={chat.selectConversation} />
+        <Sidebar initialUsername={chat.initialUsername} onName={chat.connect} state={chat.state} contacts={contacts} onSelect={chat.selectConversation} onSignIn={onSignIn} />
         <main className="chat">
           <ChatHeader state={chat.state} peer={peer} onReconnect={() => chat.connect()} onDisconnect={chat.disconnect} />
           <MessageList key={chat.state.conversation} messages={messages} connected={chat.state.connected && (!peer || peer.online)}
@@ -138,4 +140,24 @@ export function App() {
       </div>
     </>
   );
+}
+
+export function App() {
+  const [user, setUser] = useState(null);
+  const [auth, setAuth] = useState(false);
+  const [authError, setAuthError] = useState("");
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    let active = true;
+    api("/auth/me").then(data => {if (active) setUser(data.user);}).catch(() => {})
+      .finally(() => {if (active) setReady(true);});
+    return () => {active = false;};
+  }, []);
+  const expired = useCallback(() => {
+    setUser(null); setAuth(true); setAuthError("Your session expired. Sign in again to see your saved conversations.");
+  }, []);
+  if (!ready) return <main className="auth-page"><p role="status">Opening Baatchit…</p></main>;
+  if (user) return <AccountChat key={user.id} user={user} onExpired={expired} onLogout={() => setUser(null)} />;
+  if (auth) return <AuthForm initialError={authError} onSuccess={account => {setUser(account); setAuth(false); setAuthError("");}} onCancel={() => setAuth(false)} />;
+  return <GuestApp onSignIn={() => {setAuth(true); setAuthError("");}} />;
 }

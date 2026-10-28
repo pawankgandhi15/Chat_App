@@ -82,10 +82,9 @@
       }
     },
     "secrets_required": {
-      "const": [
-        "redis-url",
-        "redis-auth",
-        "gateway-tls"
+      "enum": [
+        ["redis-url", "redis-auth", "gateway-tls"],
+        ["redis-url", "redis-auth", "gateway-tls", "database-url"]
       ]
     }
   }

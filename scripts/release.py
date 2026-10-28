@@ -183,7 +183,7 @@ def render(args):
     manifest = {"schema_version":1, "release_id":args.release_id, "source_commit":args.commit,
                 "created_at":datetime.now(timezone.utc).isoformat(), "origin":args.origin,
                 "target_architecture":"linux/amd64", "images":images, "files":files,
-                "secrets_required":["redis-url", "redis-auth", "gateway-tls"]}
+                "secrets_required":["redis-url", "redis-auth", "gateway-tls", "database-url"]}
     (directory / "release.json").write_text(json.dumps(manifest, indent=2) + "\n")
     validate_bundle(directory)
     print("Rendered release; sign release.json before deployment.")

@@ -13,6 +13,7 @@ configMapGenerator:
       - ALLOWED_ORIGINS=http://localhost:8080,http://127.0.0.1:8080
       - CHANNEL_NAME=global_chat_channel
       - REDIS_URL_FILE=/etc/secrets/redis/url
+      - DATABASE_URL_FILE=/etc/secrets/database/url
   - name: redis-config
     files:
       - redis.conf

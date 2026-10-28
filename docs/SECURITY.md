@@ -1,5 +1,7 @@
 # System Security Architecture & Threat Modeling
 
+**Account milestone, 28 October 2026:** The current password/session, Origin, membership, database and privacy controls are documented in [Accounts and history](ACCOUNTS_AND_HISTORY.md#authentication-and-security). The older specification below includes design targets; it is not evidence of a completed security audit or an implementation of E2EE, MFA or account recovery.
+
 **Design Revision 5 — 2026-10-26. Status: Production Security Specification.** This document defines the zero-trust security architecture, STRIDE threat models, container hardening standards, Redis ACL policies, and supply-chain integrity controls for Baatchit.
 
 ---

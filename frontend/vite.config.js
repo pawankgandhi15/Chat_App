@@ -4,7 +4,8 @@ import react from "@vitejs/plugin-react";
 
 // Optional local backend. Preserve the browser Origin for backend admission checks.
 const proxy = process.env.BAATCHIT_WS_TARGET
-  ? {"/ws": {target: process.env.BAATCHIT_WS_TARGET, ws: true, changeOrigin: false}}
+  ? {"/ws": {target: process.env.BAATCHIT_WS_TARGET, ws: true, changeOrigin: false},
+     "/api": {target: process.env.BAATCHIT_WS_TARGET.replace(/^ws/, "http"), changeOrigin: false}}
   : undefined;
 
 export default defineConfig({

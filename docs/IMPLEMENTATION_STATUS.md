@@ -1,5 +1,15 @@
 # Implementation status and evidence
 
+## Accounts and persistent conversations — 2026-10-28
+
+- Added stable password accounts, revocable cookie sessions, searchable usernames, persistent direct conversations and saved message history. Guest v1/v2 remains separate.
+- PostgreSQL is the deployment database; local tests use file-backed SQLite through the same SQLAlchemy Core model. Writes are authorized, sequenced and deduplicated within transactions. Redis publishes member-only invalidation hints after commit; periodic refresh repairs lost hints.
+- Added a PostgreSQL platform Deployment/PVC/Service, schema initialization before local rollout, database network policy and release-secret requirements. App rollback leaves the database platform intact; local cluster deletion now requires explicit confirmation.
+- Local persistence/security/concurrency and real-browser checks passed, including lost-response retries, returning recipients, history pagination and non-member rejection. The React build, existing client/guest-browser tests and rendered Kubernetes checks also passed. Browser account tests use real HTTP/WebSockets/SQLite and stubbed Redis; the cross-replica test uses the RESP Pub/Sub double.
+- Recorded local suite results: **34 Python backend/integration tests, 10 JavaScript client tests and 6 Chromium browser tests passed** (50 total). One PostgreSQL test was skipped locally because no isolated PostgreSQL instance was available. The browser fixture uses the same WebSocket transport/drain path as the production entrypoint. These results are separate from the original 42-test/load benchmark below.
+- A real PostgreSQL concurrency/persistence test and fresh PostgreSQL CI service are included. Docker is stopped, so the new PostgreSQL container, migrations under Kubernetes, persistent-volume recovery, AWS deployment, backup restore and updated load capacity have **not** been verified locally. The historical measurements below do not establish performance or reliability for saved chat.
+- See [Accounts and history](ACCOUNTS_AND_HISTORY.md) for the complete current contract and limitations. There is no password recovery, E2EE, durable read receipt or verified real-world identity.
+
 **Recorded: 2026-10-27.** The project now has a runnable application and local Kubernetes deployment. Historical design guides describe broader acceptance goals; this file records what has actually been implemented and checked.
 
 ## Direct messaging — 2026-10-28

@@ -1,5 +1,7 @@
 # Baatchit: Complete Project and Interview Guide (Easy + Advanced Edition)
 
+**Accounts milestone, 28 October 2026:** Stable accounts, PostgreSQL-backed direct conversations, saved history, authorization and idempotent saves are now implemented. Read [Accounts and history](ACCOUNTS_AND_HISTORY.md) for the current data model, authentication, consistency and failure behavior. Answers below that describe “no accounts” or “no durable storage” apply to the historical guest-chat baseline; guest General/v2 remains temporary.
+
 **Historical snapshot:** 27 October 2026. Most of this interview guide describes the original anonymous public-room baseline and its measured local tests. On 28 October, React and session-based direct messaging were added; use [Direct messaging](DIRECT_MESSAGING.md) and [Implementation status](IMPLEMENTATION_STATUS.md) for the current behavior and evidence. AWS deployment remains a target.
 
 When a design document disagrees with the running code, the source code and the implementation status file win. Commands and defaults can change after this snapshot, so re-check the linked files before repeating a deployment.

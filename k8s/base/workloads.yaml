@@ -180,6 +180,9 @@ spec:
             - name: redis-url
               mountPath: /etc/secrets/redis
               readOnly: true
+            - name: database-url
+              mountPath: /etc/secrets/database
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir:
@@ -187,6 +190,10 @@ spec:
         - name: redis-url
           secret:
             secretName: redis-url
+            defaultMode: 0440
+        - name: database-url
+          secret:
+            secretName: database-url
             defaultMode: 0440
 ---
 apiVersion: apps/v1

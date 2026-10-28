@@ -1,4 +1,5 @@
 import socket
+import json
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket
@@ -12,6 +13,7 @@ from .sessions import Sessions
 from .settings import Settings
 from .telemetry import Metrics, log_event
 from .validation import valid_username
+from .accounts import Accounts, install_accounts
 
 
 class Runtime:
@@ -20,11 +22,20 @@ class Runtime:
         self.replica = socket.gethostname()[:64]
         self.metrics = Metrics(self.replica)
         self.sessions = Sessions(settings, self.metrics, self.replica)
-        self.broker = Broker(settings, self.metrics, self.sessions.fanout,
+        self.accounts = Accounts(self)
+        self.broker = Broker(settings, self.metrics, self.fanout,
                              self.sessions.broker_unavailable)
+
+    def fanout(self, payload):
+        event = json.loads(payload)
+        if event.get("type") == "_saved":
+            self.accounts.notify(event["users"])
+        else:
+            self.sessions.fanout(payload)
 
     def drain(self):
         self.sessions.drain()
+        self.accounts.notify(list(self.accounts.listeners))
 
 
 def create_app(settings=None):
@@ -32,6 +43,8 @@ def create_app(settings=None):
 
     @asynccontextmanager
     async def lifespan(app):
+        if runtime.accounts.storage:
+            await runtime.accounts.call("check")
         await runtime.broker.start()
         await runtime.sessions.start_presence(runtime.broker)
         log_event("started", release_id=runtime.settings.release_id)
@@ -41,10 +54,13 @@ def create_app(settings=None):
             runtime.drain()
             await runtime.sessions.stop_presence()
             await runtime.broker.stop()
+            if runtime.accounts.storage:
+                runtime.accounts.storage.engine.dispose()
             log_event("stopped")
 
     app = FastAPI(title="Baatchit", lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
     app.state.runtime = runtime
+    install_accounts(app, runtime)
 
     @app.get("/live")
     async def live():

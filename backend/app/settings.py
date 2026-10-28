@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     channel_name: str = Field(default="global_chat_channel", pattern=r"^[a-z0-9_-]{3,64}$")
     redis_url: SecretStr | None = None
     redis_url_file: Path | None = None
+    database_url: SecretStr | None = None
+    database_url_file: Path | None = None
+    session_days: int = Field(default=7, ge=1, le=30)
     max_connections_per_replica: int = Field(default=64, ge=10, le=256)
     rate_messages_per_second: float = Field(default=2, ge=0.5, le=10)
     rate_burst: int = Field(default=5, ge=1, le=20)
@@ -39,8 +42,20 @@ class Settings(BaseSettings):
                 raise ValueError("Redis secret file cannot be read") from None
         return self.redis_url.get_secret_value() if self.redis_url else ""
 
+    def resolve_database_url(self) -> str:
+        if self.database_url_file:
+            return self.database_url_file.read_text(encoding="utf-8").strip()
+        return self.database_url.get_secret_value() if self.database_url else ""
+
     @model_validator(mode="after")
     def validate_contract(self):
+        if self.database_url and self.database_url_file:
+            raise ValueError("Set only one database credential source")
+        database = self.resolve_database_url()
+        if database and not database.startswith(("postgresql+psycopg://", "sqlite:///")):
+            raise ValueError("Use postgresql+psycopg:// or a local sqlite:/// file")
+        if self.app_env == "public" and database and (not self.database_url_file or not database.startswith("postgresql+psycopg://")):
+            raise ValueError("Public accounts require a PostgreSQL credential file")
         if bool(self.redis_url) == bool(self.redis_url_file):
             raise ValueError("Set exactly one Redis credential source")
         if self.subscriber_heartbeat_seconds >= self.subscriber_stale_seconds:

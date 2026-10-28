@@ -1,5 +1,7 @@
 # Session-based direct messaging
 
+This guide covers **temporary guest chats**. Registered accounts and persistent conversations are now available through the separate [Accounts and history](ACCOUNTS_AND_HISTORY.md) feature. The limitations below apply to guest v2, not saved account chats.
+
 **Status: implemented, 28 October 2026.** Baatchit supports a public General room and ephemeral one-to-one conversations between currently connected `chat.v2` sessions. This document records the current protocol and its limits. The original [v1 specification](API_SPECIFICATION.md) remains valid for legacy public chat.
 
 ## What a user can do

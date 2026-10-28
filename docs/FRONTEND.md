@@ -1,5 +1,7 @@
 # React Frontend, UI/UX and Client Architecture
 
+**Saved-chat extension:** `AccountChat.jsx` now provides sign-in/registration, username search, stable direct conversations, saved history pagination and cookie-session restoration. `App.jsx` restores an existing login or offers account access from guest mode. Guest hooks below are unchanged; the separate account data flow is described in [Accounts and history](ACCOUNTS_AND_HISTORY.md).
+
 **Updated: 28 October 2026.** Baatchit uses React 19 and Vite 8 for its browser interface. This guide describes the implemented client. It supersedes the earlier native DOM renderer; the WebSocket protocol and backend architecture are unchanged.
 
 ## 1. Technology and build

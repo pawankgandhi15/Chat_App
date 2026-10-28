@@ -1,6 +1,6 @@
 # Local development
 
-The application runs in a disposable k3d cluster with four Deployments and five application Pods. No AWS credentials are needed. See [implementation evidence](IMPLEMENTATION_STATUS.md) for the tested scope.
+The application runs in k3d with four application Deployments/five application Pods plus a PostgreSQL Deployment/Pod and persistent volume. No AWS credentials are needed. The account milestone adds schema initialization to `scripts/local.py up`; see [Accounts and history](ACCOUNTS_AND_HISTORY.md) for setup and the native SQLite development option. Deleting the local cluster deletes saved account/message data; `down` now asks for confirmation. See [implementation evidence](IMPLEMENTATION_STATUS.md) for the tested scope.
 
 ## Prerequisites
 
@@ -29,7 +29,7 @@ $env:BAATCHIT_WS_TARGET = 'http://127.0.0.1:8000'
 npm.cmd run dev
 ~~~
 
-Vite proxies only `/ws` and preserves the browser Origin. The backend still needs Redis and must allow the exact frontend origin (`http://127.0.0.1:8080` or `http://localhost:8080`). This variable does not start backend services and is not embedded into production JavaScript. Clear it with `Remove-Item Env:BAATCHIT_WS_TARGET` when returning to a frontend-only preview. Linux/macOS: `BAATCHIT_WS_TARGET=http://127.0.0.1:8000 npm run dev`.
+Vite proxies `/ws` and `/api` and preserves the browser Origin. The backend must allow the exact frontend origin (`http://127.0.0.1:8080` or `http://localhost:8080`). Redis supports guest messaging and cross-replica account notifications; saved chats also require a configured/migrated database. This variable does not start backend services and is not embedded into production JavaScript. Clear it with `Remove-Item Env:BAATCHIT_WS_TARGET` when returning to a frontend-only preview. Linux/macOS: `BAATCHIT_WS_TARGET=http://127.0.0.1:8000 npm run dev`.
 
 Build and inspect the production output:
 

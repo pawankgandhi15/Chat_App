@@ -1,5 +1,7 @@
 # Deployment and recovery
 
+**Account-capable releases:** Provision PostgreSQL and protected storage, create the `database-url` Secret and apply schema v1 before rolling out this version. `scripts/bootstrap_secrets.py` accepts `--database-url-file` for first provisioning. The new local launcher performs database/bootstrap migration steps; cloud deployment still requires operator preparation. See [Accounts and history deployment preparation](ACCOUNTS_AND_HISTORY.md#deployment-preparation). Database/PVC resources are outside signed app bundles and are not deleted during application rollback. Local `down` now requires `DELETE` because cluster deletion loses saved data.
+
 The local Kubernetes deployment is working. AWS infrastructure and signed delivery tooling are implemented, but no AWS environment, public certificate, registry release or cloud rollback rehearsal has been created by this implementation. See [implementation status](IMPLEMENTATION_STATUS.md).
 
 ## Local deployment

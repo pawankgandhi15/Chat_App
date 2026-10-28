@@ -9,7 +9,7 @@ from redis.asyncio import Redis
 from redis.backoff import NoBackoff
 from redis.retry import Retry
 
-from .protocol import BroadcastEvent, PresenceSnapshot, PrivateEvent
+from .protocol import BroadcastEvent, PresenceSnapshot, PrivateEvent, SavedNotification
 from .telemetry import log_event
 
 
@@ -116,11 +116,11 @@ class Broker:
                         if "_probe" in value:
                             continue  # Another replica's control packet never reaches browsers.
                         kind = value.get("type")
-                        model = PresenceSnapshot if kind == "_presence" else PrivateEvent if kind == "private" else BroadcastEvent
+                        model = SavedNotification if kind == "_saved" else PresenceSnapshot if kind == "_presence" else PrivateEvent if kind == "private" else BroadcastEvent
                         event = model.model_validate(value)
                         if kind == "private" and event.sender_id == event.recipient_id:
                             continue
-                        if kind != "_presence" and event.time != event.sent_at[11:19] + " UTC":
+                        if kind not in {"_presence", "_saved"} and event.time != event.sent_at[11:19] + " UTC":
                             continue
                         self.on_event(event.model_dump_json())
                     except (ValueError, ValidationError):

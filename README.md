@@ -2,7 +2,7 @@
 
 **Live conversations, built with React, FastAPI, Redis and Kubernetes.**
 
-Baatchit is a lightweight browser-based messaging app. Join the shared General room or choose another connected session for a direct conversation. Messages are live and temporary, and display names are not verified. The responsive React interface keeps separate drafts for each conversation.
+Baatchit is a browser-based messaging app with accounts, persistent one-to-one conversations and saved message history. Sign in, find someone by username and return to the same conversation after reconnecting. A separate guest mode provides the temporary General room and session-based direct messages. The responsive React interface keeps separate drafts for each conversation.
 
 [Run locally](docs/DEVELOPMENT.md) · [Complete project and interview guide](docs/PROJECT_INTERVIEW_GUIDE.md) · [Implementation evidence](docs/IMPLEMENTATION_STATUS.md) · [API contract](docs/API_SPECIFICATION.md) · [System design](docs/design/README.md)
 
@@ -23,6 +23,8 @@ Verification results below were recorded on **27 October 2026**. For subsequent 
 **React migration — 28 October 2026:** The frontend now uses React 19 and Vite 8. The production bundle, six protocol/client tests and three browser tests with intercepted WebSockets were checked locally. The older full-stack and load results below describe the previous frontend; Docker/Kubernetes and load checks have not been repeated for this migration.
 
 **Direct messaging — 28 October 2026:** The `chat.v2` protocol adds a list of currently connected sessions and targeted one-to-one messages across replicas. The existing `chat.v1` public-room protocol remains supported. See [Direct messaging](docs/DIRECT_MESSAGING.md) for behavior, security limits and current verification evidence.
+
+**Accounts and saved history — 28 October 2026:** Added registration/login, stable account IDs, searchable usernames, persistent direct conversations, paginated history, revocable cookie sessions and idempotent message saving. PostgreSQL is the deployment database; SQLite supports single-machine development/tests. See [Accounts and history](docs/ACCOUNTS_AND_HISTORY.md) for setup, API, schema and evidence. Docker/PostgreSQL/Kubernetes checks for this milestone remain pending locally; the browser persistence checks use real SQLite and stub Redis publishing.
 
 ## Run locally
 
@@ -77,6 +79,8 @@ python scripts/local.py up
 
 Open **http://localhost:8080** in two tabs. No AWS account is needed. The launcher builds the images, creates the local cluster and waits for all services.
 
+Choose **Sign in for saved chats**, create an account and find another registered username. Use separate browser profiles/private windows for two different accounts; tabs in one browser profile share the login cookie. The launcher now also provisions a PostgreSQL PVC and initializes schema v1. Re-running `up` preserves data; `down` requires explicit confirmation and deletes local cluster data.
+
 Try General by sending a message from one tab. For a direct conversation, wait for the other tab's session to appear under Direct messages and select it. Change a display name, then disconnect and reconnect to observe the new session ID. Unsent drafts stay in that tab; messages missed during a disconnect are not replayed.
 
 ### Inspect, rebuild and stop
@@ -94,6 +98,7 @@ For tool installation and troubleshooting, see [Development](docs/DEVELOPMENT.md
 
 ## What is implemented
 
+- **Accounts and saved chats:** password login, permanent account IDs, unique direct conversations, authorized paginated history and idempotent saves in PostgreSQL.
 - **Live messaging:** session-first `chat.v2` WebSockets for public and direct messages, with `chat.v1` compatibility and Redis Pub/Sub across backend replicas.
 - **Responsive interface:** keyboard controls, connection feedback, safe text rendering and mobile layout.
 - **Recovery:** bounded retries, retained unsent drafts and no automatic message resending.
@@ -107,7 +112,7 @@ Detailed results and remaining acceptance work are recorded in [Implementation s
 
 ![Baatchit AWS K3s deployment design: one EC2 node with gateway, frontend, two backend Pods and Redis; private Terraform state in S3.](docs/images/aws-k3s-architecture.png)
 
-*AWS deployment design; cloud resources have not been provisioned. [View full-size](docs/images/aws-k3s-architecture.png).*
+*Earlier guest-chat AWS design; the new PostgreSQL persistence layer is not shown in this image. Cloud resources have not been provisioned. [View full-size](docs/images/aws-k3s-architecture.png).*
 
 ~~~mermaid
 flowchart LR
@@ -117,9 +122,13 @@ flowchart LR
     Gateway --> BackendB[FastAPI replica B]
     BackendA <-->|Pub/Sub| Redis
     BackendB <-->|Pub/Sub| Redis
+    BackendA -->|Accounts and saved messages| PostgreSQL[(PostgreSQL)]
+    BackendB -->|Accounts and saved messages| PostgreSQL
 ~~~
 
 A backend validates each message, assigns its event ID and publishes it once. Both backends consume the event and deliver it to their connected clients. Each socket has an independent bounded writer queue.
+
+That live-message path describes guest chat. Signed-in chats commit messages to PostgreSQL before acknowledgment; Redis carries member-specific refresh hints, and browsers retrieve history through authenticated APIs. A PostgreSQL platform Deployment/PVC is managed separately from the four application Deployments. See [the saved-chat architecture](docs/ACCOUNTS_AND_HISTORY.md#architecture-and-boundaries).
 
 Local development uses k3d. The AWS target uses K3s/containerd on one EC2 host, with K3s ServiceLB exposing only the gateway. Redis and backend diagnostics stay private. Two backend Pods demonstrate distributed messaging; they do not provide host-level high availability.
 
@@ -130,6 +139,7 @@ Local development uses k3d. The AWS target uses K3s/containerd on one EC2 host, 
 | Interface | React 19, React DOM, JSX, CSS and Vite 8 |
 | API and transport | Python 3.12, FastAPI, Uvicorn, Pydantic, WebSockets |
 | Messaging | Redis Pub/Sub and redis.asyncio |
+| Accounts and persistence | PostgreSQL, SQLAlchemy Core, psycopg; file-backed SQLite for local development/tests |
 | Web serving | Nginx static server and reverse proxy |
 | Runtime | Docker/OCI, k3d, K3s, containerd, Kustomize |
 | Infrastructure code | Terraform for EC2, EBS, VPC and S3 state |
@@ -228,6 +238,7 @@ Application resources use the `baatchit` namespace and local cluster name, `k3d-
 | [Backend](docs/BACKEND.md) | Modules, messaging, validation, recovery and service engineering |
 | [API Specification](docs/API_SPECIFICATION.md) | Routes, event schemas, input rules and close codes |
 | [Direct Messaging](docs/DIRECT_MESSAGING.md) | Session discovery, v2 protocol, routing, privacy boundaries and failure behavior |
+| [Accounts and History](docs/ACCOUNTS_AND_HISTORY.md) | Login, persistent identity, saved conversations, database setup, API, authorization and retry semantics |
 | [Technologies](docs/TECHNOLOGIES.md) | Stack choices, compatibility considerations and candidate versions |
 | [Project Structure](docs/PROJECT_STRUCTURE.md) | Module responsibilities and future layout proposals |
 | [Decisions and Risks](docs/DECISIONS_AND_RISKS.md) | Architectural decisions, trade-offs and implementation risks |
@@ -260,7 +271,7 @@ The design handbook and planning documents retain future proposals. Use the impl
 
 ## Scope and deployment
 
-This is an anonymous, ephemeral chat with one public room and direct messages between currently connected sessions. Other browser sessions are not sent a direct message, but display names are not verified, and operators and the Redis transport can access plaintext. Direct messages are not end-to-end encrypted. Accounts, attachments, durable history and read receipts are outside the current scope. Messages missed while disconnected cannot be recovered.
+Signed-in users have stable accounts, persistent direct conversations and saved history, including messages saved while a recipient is disconnected. Guest General/session chats remain temporary and their names unverified; guest history is not imported into accounts. Password accounts do not verify real-world identity. Service/database operators can read saved messages, and neither mode provides end-to-end encryption. Attachments, password recovery, group accounts, delivery/read receipts and push notifications remain outside the implemented scope.
 
 The AWS Terraform defaults target a single 2-vCPU/4-GiB candidate in Mumbai. Review account eligibility, actual prices, credits and teardown arrangements before provisioning. K3s avoids a managed Kubernetes control plane, but EC2 and related resources still consume credits or money.
 

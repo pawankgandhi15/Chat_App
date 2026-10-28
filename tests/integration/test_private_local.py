@@ -2,6 +2,7 @@
 import asyncio
 import json
 import socket
+import httpx
 from contextlib import suppress
 from uuid import uuid4
 
@@ -157,6 +158,75 @@ async def test_private_messages_across_replicas_and_legacy_isolation():
                 assert closed.rcvd.code == 1008
             else:
                 raise AssertionError("Forged sender field was accepted")
+    finally:
+        for server in servers:
+            server.should_exit = True
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for listener in listeners:
+            listener.close()
+        redis_server.close()
+        await redis_server.wait_closed()
+
+
+async def test_saved_account_notifications_cross_replicas_and_guest_isolation(tmp_path):
+    """Real sockets and shared SQLite; Redis is the RESP test double above."""
+    bus = LocalPubSub()
+    redis_server = await asyncio.start_server(bus.handle, "127.0.0.1", 0)
+    redis_port = redis_server.sockets[0].getsockname()[1]
+    servers, tasks, listeners, apps = [], [], [], []
+    try:
+        for index in range(2):
+            app = create_app(Settings(app_env="test", redis_url=f"redis://127.0.0.1:{redis_port}/0",
+                database_url="sqlite:///" + (tmp_path / "shared.db").as_posix(),
+                subscriber_heartbeat_seconds=1, subscriber_stale_seconds=3))
+            if index == 0:
+                await app.state.runtime.accounts.call("migrate")
+            apps.append(app)
+            listener = socket.socket()
+            listener.bind(("127.0.0.1", 0))
+            listener.listen(128)
+            listener.setblocking(False)
+            server = Server(Config(app, log_level="error", lifespan="on", access_log=False))
+            servers.append(server)
+            listeners.append(listener)
+            tasks.append(asyncio.create_task(server.serve(sockets=[listener])))
+        await wait_until(lambda: all(server.started for server in servers))
+        await wait_until(lambda: all(app.state.runtime.broker.ready for app in apps))
+        urls = [f"http://127.0.0.1:{listener.getsockname()[1]}" for listener in listeners]
+        headers = {"Origin": "http://localhost:8080"}
+        async with (httpx.AsyncClient(base_url=urls[0], headers=headers) as alice,
+                    httpx.AsyncClient(base_url=urls[1], headers=headers) as bob,
+                    httpx.AsyncClient(base_url=urls[1], headers=headers) as observer):
+            users = []
+            for client, name in ((alice, "Alice"), (bob, "Bob"), (observer, "Observer")):
+                response = await client.post("/api/auth/register", json={"username": name, "password": "a-long-test-password"})
+                assert response.status_code == 201
+                users.append(response.json()["user"])
+            cid = (await alice.post("/api/conversations", json={"user_id": users[1]["id"]})).json()["id"]
+            # Ensure the opening notification is consumed before opening listeners.
+            await asyncio.sleep(.1)
+            opts = {"origin": "http://localhost:8080", "subprotocols": ["chat.accounts.v1"]}
+            async with (connect(urls[1].replace("http:", "ws:") + "/ws/accounts/live", additional_headers={"Cookie": "baatchit_session=" + bob.cookies.get("baatchit_session")}, **opts) as bob_live,
+                        connect(urls[1].replace("http:", "ws:") + "/ws/accounts/live", additional_headers={"Cookie": "baatchit_session=" + observer.cookies.get("baatchit_session")}, **opts) as observer_live,
+                        connect(urls[0].replace("http:", "ws:") + "/ws/Guest", origin="http://localhost:8080", subprotocols=["chat.v1"]) as guest):
+                assert json.loads(await bob_live.recv()) == {"type": "sync"}
+                assert json.loads(await observer_live.recv()) == {"type": "sync"}
+                assert json.loads(await guest.recv())["type"] == "session"
+                response = await alice.post(f"/api/conversations/{cid}/messages", json={"client_id": str(uuid4()), "text": "saved cross replica"})
+                assert response.status_code == 200
+                assert json.loads(await asyncio.wait_for(bob_live.recv(), 3)) == {"type": "sync"}
+                with suppress(TimeoutError):
+                    async with asyncio.timeout(.3):
+                        assert not await observer_live.recv(), "Unrelated account received an invalidation"
+                page = await bob.get(f"/api/conversations/{cid}/messages")
+                assert page.json()["items"][0]["text"] == "saved cross replica"
+                assert (await observer.get(f"/api/conversations/{cid}/messages")).status_code == 404
+                with suppress(TimeoutError):
+                    async with asyncio.timeout(.3):
+                        while True:
+                            packet = json.loads(await guest.recv())
+                            assert packet["type"] in {"chat", "system"}
+                            assert "saved cross replica" not in json.dumps(packet)
     finally:
         for server in servers:
             server.should_exit = True

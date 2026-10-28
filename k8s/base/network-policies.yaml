@@ -70,6 +70,10 @@ spec:
         - podSelector:
             matchLabels: {app: redis}
       ports: [{protocol: TCP, port: 6379}]
+    - to:
+        - podSelector:
+            matchLabels: {app: postgres}
+      ports: [{protocol: TCP, port: 5432}]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -83,3 +87,17 @@ spec:
         - podSelector:
             matchLabels: {app: backend}
       ports: [{protocol: TCP, port: 6379}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata: {name: database-migration}
+spec:
+  podSelector:
+    matchLabels: {app: database-migration}
+  policyTypes: [Ingress, Egress]
+  ingress: []
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {app: postgres}
+      ports: [{protocol: TCP, port: 5432}]

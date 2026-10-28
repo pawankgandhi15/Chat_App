@@ -53,6 +53,21 @@ class PresenceSnapshot(BaseModel):
     peers: list[Peer] = Field(max_length=256)
 
 
+class SavedNotification(BaseModel):
+    """Internal invalidation only; saved message bodies stay in the database/API."""
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    type: Literal["_saved"] = "_saved"
+    users: list[str] = Field(min_length=2, max_length=2)
+
+    @field_validator("users")
+    @classmethod
+    def valid_ids(cls, value):
+        import re
+        if any(not re.fullmatch(UUID4, item) for item in value):
+            raise ValueError("Invalid account ID")
+        return value
+
+
 class PrivateEvent(EventBase):
     type: Literal["private"] = "private"
     event_id: str = Field(pattern=UUID4)

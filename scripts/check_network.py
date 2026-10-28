@@ -26,10 +26,12 @@ if __name__ == "__main__":
     probe("gateway", "frontend", 80, True)
     probe("gateway", "backend", 8000, True)
     probe("backend", "redis", 6379, True)
+    probe("backend", "postgres", 5432, True)
     # DNS must work for the negative test to mean anything.
     for source in ["gateway", "frontend"]:
         kubectl("-n", "baatchit", "exec", "deployment/" + source, "--", "nslookup", "redis.baatchit.svc.cluster.local", capture=True)
         probe(source, "redis", 6379, False)
+        probe(source, "postgres", 5432, False)
     pod = json.loads(kubectl("-n", "baatchit", "get", "pods", "-l", "app=redis",
                              "-o", "json", capture=True).stdout)["items"][0]
     probe("gateway", pod["status"]["podIP"], 6379, False)
