@@ -1,6 +1,6 @@
 # Baatchit: Complete Project and Interview Guide (Easy + Advanced Edition)
 
-**Snapshot:** 27 October 2026. **Project:** Baatchit, an anonymous, single-room, live browser chat. **Evidence level:** the application and local Kubernetes stack are implemented and tested; AWS deployment is still a target.
+**Historical snapshot:** 27 October 2026. Most of this interview guide describes the original anonymous public-room baseline and its measured local tests. On 28 October, React and session-based direct messaging were added; use [Direct messaging](DIRECT_MESSAGING.md) and [Implementation status](IMPLEMENTATION_STATUS.md) for the current behavior and evidence. AWS deployment remains a target.
 
 When a design document disagrees with the running code, the source code and the implementation status file win. Commands and defaults can change after this snapshot, so re-check the linked files before repeating a deployment.
 
@@ -16,17 +16,17 @@ When a design document disagrees with the running code, the source code and the 
 
 ## 1. The answer in 30 seconds
 
-> I built Baatchit, a browser-based real-time group chat that runs two independent FastAPI WebSocket replicas behind Nginx. Each replica uses Redis Pub/Sub so a message sent to one replica reaches clients on both. The frontend is plain HTML, CSS and JavaScript. I added strict message validation, connection and message budgets, slow-client isolation, a Redis heartbeat for readiness, Kubernetes network policies, automated tests, and a signed release workflow. I verified it locally on k3d. The AWS K3s deployment is defined in Terraform and manifests but has not been provisioned or performance-tested.
+> I built Baatchit, a React-based real-time chat with two FastAPI WebSocket replicas behind Nginx. Redis Pub/Sub carries public messages and routes direct events to the two selected sessions. The system includes strict protocol validation, bounded queues and rate limits, Kubernetes policies and release tooling. The original public-room deployment was verified locally on k3d; the newer direct-message path has been checked with a Pub/Sub test double and browser mocks. AWS provisioning and full-stack verification of direct messaging remain pending.
 
-**Do not say:** WhatsApp clone, production high-availability service, or deployed AWS application. It has no accounts, private chats, database, offline delivery, end-to-end encryption, or verified identity.
+**Do not say:** WhatsApp clone, production high-availability service, or deployed AWS application. Session-based direct messaging exists, but it has no verified identity or end-to-end encryption. There are no accounts, durable database, or offline delivery.
 
 ### The two-minute explanation
 
 1. The browser opens the Nginx gateway. Nginx serves the static UI and proxies `/ws/{username}` to the backend Service.
-2. The backend checks the exact `Origin`, the required `chat.v1` subprotocol, the username, Redis subscriber readiness, and replica capacity before accepting the socket.
+2. The backend checks the exact `Origin`, a supported `chat.v2` or `chat.v1` subprotocol, the username, Redis subscriber readiness, and replica capacity before accepting the socket.
 3. It sends a private `session` event first. The browser enables sending only after it validates that event.
-4. The browser sends plain text. The backend validates it, applies rate limits, adds a server-owned event ID and timestamp, and publishes once to Redis.
-5. Both backend replicas subscribe to the same Redis channel. Each queues the event for its own connected clients. Separate writer tasks stop one slow client from blocking others.
+4. A v2 browser sends a JSON public or direct command; v1 clients send public plain text. The backend validates it, applies rate limits, adds a server-owned event ID and timestamp, and publishes once to Redis.
+5. Both backend replicas subscribe to the same Redis channel. Public messages fan out locally; direct events are queued only for the sender and recipient session IDs. Separate writer tasks stop one slow client from blocking others.
 6. Delivery is live and ephemeral. Redis Pub/Sub stores nothing and replays nothing, so the UI never promises delivery just because `send()` worked.
 7. Local k3d validates the whole topology. The AWS design is one EC2 host running K3s, so the host and Redis remain single points of failure.
 
@@ -38,7 +38,7 @@ Baatchit demonstrates multi-replica real-time messaging on a small infrastructur
 
 | Dimension | Implemented baseline |
 | --- | --- |
-| Product | One public `#general` room, anonymous temporary names, text and advisory join/leave messages |
+| Product | One public `#general` room and direct messaging between active sessions, anonymous temporary names and advisory join/leave messages |
 | Client | Responsive desktop and mobile UI, in-memory draft and recent events, connection feedback |
 | Identity | No login. Names can be reused or impersonated |
 | Durability | None. Missed events cannot be replayed |

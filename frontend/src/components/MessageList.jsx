@@ -1,4 +1,5 @@
 import {PureComponent, createRef, memo} from "react";
+import {Icon} from "./Icon.jsx";
 
 const Message = memo(function Message({event}) {
   if (event.type === "system") return <li className="system-message" data-id={event.event_id}>{event.text}</li>;
@@ -21,7 +22,9 @@ export class MessageList extends PureComponent {
   scrollRemainder = 0;
 
   getSnapshotBeforeUpdate(previousProps) {
-    if (previousProps.messages === this.props.messages) return null;
+    if (previousProps.messages === this.props.messages ||
+        (previousProps.messages.length === this.props.messages.length &&
+         previousProps.messages.every((event, index) => event === this.props.messages[index]))) return null;
     const scroller = this.scroller.current;
     const pinned = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 70;
     const top = scroller.getBoundingClientRect().top;
@@ -64,15 +67,25 @@ export class MessageList extends PureComponent {
   };
 
   render() {
+    const hasChat = this.props.messages.some(event => event.type === "chat" || event.type === "private");
+    const offline = ["Paused", "Disconnected", "Protocol error"].includes(this.props.status);
     return (
       <>
-        <section className="conversation" aria-label="Conversation" ref={this.scroller} onScroll={this.onScroll}>
-          <div className="welcome">
-            <span className="welcome-symbol" aria-hidden="true">✳</span>
-            <p className="eyebrow">THE START OF SOMETHING</p><h2>Pull up a chair.</h2>
-            <p>Say hello, share a thought, or just listen.<br />Good conversations start with a simple message.</p>
-            <div className="welcome-rule" />
-          </div>
+        <section className={hasChat ? "conversation" : "conversation conversation--empty"} aria-label="Conversation" ref={this.scroller} onScroll={this.onScroll}>
+          {!hasChat && <div className="welcome">
+            <div className="welcome-art" aria-hidden="true">
+              <span className="art-orbit art-orbit-one" /><span className="art-orbit art-orbit-two" />
+              <span className="art-bubble"><Icon name="chat" /></span>
+              <span className="art-sparkle"><Icon name="sparkle" /></span>
+              <span className="art-dot art-dot-one" /><span className="art-dot art-dot-two" />
+            </div>
+            <span className="welcome-eyebrow">{this.props.peer ? "A CONVERSATION FOR TWO" : "A LITTLE SPACE FOR EVERYONE"}</span>
+            <h2>{this.props.peer ? <>Say hello to<br />{this.props.peer.user}<span>.</span></> : <>Good conversations<br />start here<span>.</span></>}</h2>
+            <p>{this.props.peer ? <>Your conversation is between these two sessions.<br />Names are unverified and messages are temporary.</> : <>Say hello, share a thought, or just listen.<br />Everyone in this room can see your messages.</>}</p>
+            <span className="welcome-status" data-connected={this.props.connected}>
+              <span className="welcome-status-dot" />{this.props.connected ? "You're connected" : offline ? "You're offline" : "Waiting to connect"}
+            </span>
+          </div>}
           <ol id="messages" className="messages" role="log" aria-label="Live messages" aria-live="polite" aria-relevant="additions" tabIndex={0} ref={this.list}>
             {this.props.messages.map(event => <Message key={event.event_id} event={event} />)}
           </ol>

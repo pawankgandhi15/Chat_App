@@ -32,13 +32,15 @@ export function useChat() {
   }
   function send() {
     try {
-      if (connection.send(store.get().draft)) {
-        store.update({draft: "", notice: "Sent to the connection. Delivery is not confirmed until it appears in the room.", error: false});
+      const state = store.get();
+      if (connection.send(state.draft, state.conversation === "general" ? null : state.conversation)) {
+        if (state.conversation === "general") store.update({draft: "", notice: "Sent to the connection. Delivery is not confirmed until it appears here.", error: false});
       }
     } catch (error) { report(error); }
   }
 
   return {state, initialUsername, connect, send,
+    selectConversation: id => store.select(id),
     setDraft: draft => store.update({draft}),
     disconnect: () => connection.disconnect()};
 }

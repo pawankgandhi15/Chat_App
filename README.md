@@ -2,7 +2,7 @@
 
 **Live conversations, built with React, FastAPI, Redis and Kubernetes.**
 
-Baatchit is a lightweight browser-based messaging app. Open one shared room, choose a temporary display name and exchange live text messages across two backend replicas. The responsive interface preserves unsent drafts through reconnects and renders messages safely as text.
+Baatchit is a lightweight browser-based messaging app. Join the shared General room or choose another connected session for a direct conversation. Messages are live and temporary, and display names are not verified. The responsive React interface keeps separate drafts for each conversation.
 
 [Run locally](docs/DEVELOPMENT.md) · [Complete project and interview guide](docs/PROJECT_INTERVIEW_GUIDE.md) · [Implementation evidence](docs/IMPLEMENTATION_STATUS.md) · [API contract](docs/API_SPECIFICATION.md) · [System design](docs/design/README.md)
 
@@ -21,6 +21,8 @@ Baatchit is a lightweight browser-based messaging app. Open one shared room, cho
 Verification results below were recorded on **27 October 2026**. For subsequent automated runs, see [GitHub Actions](https://github.com/pawankgandhi15/Chat_App/actions/workflows/validate.yml).
 
 **React migration — 28 October 2026:** The frontend now uses React 19 and Vite 8. The production bundle, six protocol/client tests and three browser tests with intercepted WebSockets were checked locally. The older full-stack and load results below describe the previous frontend; Docker/Kubernetes and load checks have not been repeated for this migration.
+
+**Direct messaging — 28 October 2026:** The `chat.v2` protocol adds a list of currently connected sessions and targeted one-to-one messages across replicas. The existing `chat.v1` public-room protocol remains supported. See [Direct messaging](docs/DIRECT_MESSAGING.md) for behavior, security limits and current verification evidence.
 
 ## Run locally
 
@@ -75,7 +77,7 @@ python scripts/local.py up
 
 Open **http://localhost:8080** in two tabs. No AWS account is needed. The launcher builds the images, creates the local cluster and waits for all services.
 
-Try the room by sending a message from one tab, changing its display name, then disconnecting and reconnecting. Unsent drafts stay in that tab; messages missed during a disconnect are not replayed.
+Try General by sending a message from one tab. For a direct conversation, wait for the other tab's session to appear under Direct messages and select it. Change a display name, then disconnect and reconnect to observe the new session ID. Unsent drafts stay in that tab; messages missed during a disconnect are not replayed.
 
 ### Inspect, rebuild and stop
 
@@ -92,7 +94,7 @@ For tool installation and troubleshooting, see [Development](docs/DEVELOPMENT.md
 
 ## What is implemented
 
-- **Live messaging:** session-first `chat.v1` WebSockets and Redis Pub/Sub fanout across backend replicas.
+- **Live messaging:** session-first `chat.v2` WebSockets for public and direct messages, with `chat.v1` compatibility and Redis Pub/Sub across backend replicas.
 - **Responsive interface:** keyboard controls, connection feedback, safe text rendering and mobile layout.
 - **Recovery:** bounded retries, retained unsent drafts and no automatic message resending.
 - **Resource controls:** connection/rate limits, bounded queues, send deadlines and slow-client isolation.
@@ -184,7 +186,7 @@ Terraform separates the protected S3 state bucket in `infra/bootstrap-state/` fr
 
 ## Configuration and security
 
-- Exact allowed origins and the `chat.v1` subprotocol are checked before accepting a WebSocket.
+- Exact allowed origins and a supported `chat.v2` or `chat.v1` subprotocol are checked before accepting a WebSocket.
 - The backend enforces a 16 KiB transport payload cap, 2,000 normalized code points, connection/rate budgets and bounded delivery queues.
 - Redis uses an application ACL limited to the chat channel. Public mode reads its authenticated connection URI from a mounted Secret.
 - Application containers run as non-root with read-only root filesystems and restricted privileges; NetworkPolicies isolate service traffic.
@@ -225,6 +227,7 @@ Application resources use the `baatchit` namespace and local cluster name, `k3d-
 | [Frontend & UI/UX](docs/FRONTEND.md) | Screen design, accessibility, browser state and integration |
 | [Backend](docs/BACKEND.md) | Modules, messaging, validation, recovery and service engineering |
 | [API Specification](docs/API_SPECIFICATION.md) | Routes, event schemas, input rules and close codes |
+| [Direct Messaging](docs/DIRECT_MESSAGING.md) | Session discovery, v2 protocol, routing, privacy boundaries and failure behavior |
 | [Technologies](docs/TECHNOLOGIES.md) | Stack choices, compatibility considerations and candidate versions |
 | [Project Structure](docs/PROJECT_STRUCTURE.md) | Module responsibilities and future layout proposals |
 | [Decisions and Risks](docs/DECISIONS_AND_RISKS.md) | Architectural decisions, trade-offs and implementation risks |
@@ -257,7 +260,7 @@ The design handbook and planning documents retain future proposals. Use the impl
 
 ## Scope and deployment
 
-This is an anonymous, ephemeral global chat. Accounts, private conversations, attachments, durable history and read receipts are outside the current scope. Display names are not verified identities. Messages missed while disconnected cannot be recovered.
+This is an anonymous, ephemeral chat with one public room and direct messages between currently connected sessions. Other browser sessions are not sent a direct message, but display names are not verified, and operators and the Redis transport can access plaintext. Direct messages are not end-to-end encrypted. Accounts, attachments, durable history and read receipts are outside the current scope. Messages missed while disconnected cannot be recovered.
 
 The AWS Terraform defaults target a single 2-vCPU/4-GiB candidate in Mumbai. Review account eligibility, actual prices, credits and teardown arrangements before provisioning. K3s avoids a managed Kubernetes control plane, but EC2 and related resources still consume credits or money.
 

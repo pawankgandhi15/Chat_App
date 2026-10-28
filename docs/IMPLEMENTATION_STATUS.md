@@ -2,6 +2,13 @@
 
 **Recorded: 2026-10-27.** The project now has a runnable application and local Kubernetes deployment. Historical design guides describe broader acceptance goals; this file records what has actually been implemented and checked.
 
+## Direct messaging — 2026-10-28
+
+- Added `chat.v2` with session discovery and one-to-one messages, while preserving the `chat.v1` public-room protocol. Direct events are published through Redis and delivered only to the addressed sender/recipient sessions.
+- Added per-conversation drafts, unread indicators, offline state, and client-side validation. A private draft is held until the sender's own event appears; this is not a recipient acknowledgment.
+- Browser, client and two-replica ASGI checks cover direct routing and observer isolation. The ASGI check uses a local RESP Pub/Sub test double; a real Redis container test has been added but was not run for this change. Existing Kubernetes, AWS, scan and performance evidence below predates this feature.
+- Names remain unverified and sessions change on reconnect. Messages are ephemeral, are visible to the service/Redis, and are not end-to-end encrypted. See [Direct messaging](DIRECT_MESSAGING.md).
+
 ## React frontend migration — 2026-10-28
 
 - Replaced the native DOM renderer with React 19 components and a Vite 8 build. Kept the existing wire parser, connection state machine and bounded memory store.

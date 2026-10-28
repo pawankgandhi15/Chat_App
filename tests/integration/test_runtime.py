@@ -6,6 +6,7 @@ from pathlib import Path
 import secrets
 import subprocess
 import time
+from uuid import uuid4
 
 import httpx
 import pytest
@@ -191,3 +192,38 @@ async def test_acl_rejects_admin_and_other_channels(runtime):
         "asyncio.run(main())"
     )
     docker("exec", runtime["backends"][0], "python", "-c", code)
+
+
+async def test_direct_messages_are_isolated_across_real_redis(runtime):
+    def v2(url, username):
+        return connect(url.replace("http:", "ws:") + "/ws/" + username,
+                       origin=ORIGIN, subprotocols=["chat.v2"])
+
+    async def peer_list(socket, peer_id):
+        async with asyncio.timeout(10):
+            while True:
+                value = json.loads(await socket.recv())
+                if value["type"] == "peers" and any(p["connection_id"] == peer_id for p in value["peers"]):
+                    return
+
+    async def no_private(socket):
+        try:
+            async with asyncio.timeout(0.5):
+                while True:
+                    assert json.loads(await socket.recv())["type"] != "private"
+        except TimeoutError:
+            pass
+
+    a, b = runtime["urls"]
+    async with v2(a, "Alice") as left, v2(b, "Bob") as right, v2(a, "Observer") as observer, ws(b, "Legacy") as legacy:
+        first_left, first_right, _, _ = [json.loads(await socket.recv()) for socket in (left, right, observer, legacy)]
+        await asyncio.gather(peer_list(left, first_right["connection_id"]), peer_list(right, first_left["connection_id"]))
+        client_id = str(uuid4())
+        await left.send(json.dumps({"type": "private", "to": first_right["connection_id"],
+                                    "client_id": client_id, "text": "hello privately"}))
+        sent, received = await asyncio.gather(event(left, "private"), event(right, "private"))
+        assert sent == received
+        assert sent["sender_id"] == first_left["connection_id"]
+        assert sent["recipient_id"] == first_right["connection_id"]
+        assert sent["client_id"] == client_id and sent["text"] == "hello privately"
+        await asyncio.gather(no_private(observer), no_private(legacy))

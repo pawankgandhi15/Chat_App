@@ -38,6 +38,32 @@ class BroadcastEvent(EventBase):
     time: str = Field(pattern=r"^\d\d:\d\d:\d\d UTC$")
 
 
+class Peer(BaseModel):
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    connection_id: str = Field(pattern=UUID4)
+    user: str = Field(pattern=r"^[A-Za-z0-9_-]{1,32}$")
+
+
+class PresenceSnapshot(BaseModel):
+    """Internal, ephemeral per-replica discovery over the existing Redis channel."""
+    model_config = ConfigDict(extra="forbid", strict=True, frozen=True)
+    type: Literal["_presence"] = "_presence"
+    instance_id: str = Field(pattern=UUID4)
+    sequence: int = Field(ge=1)
+    peers: list[Peer] = Field(max_length=256)
+
+
+class PrivateEvent(EventBase):
+    type: Literal["private"] = "private"
+    event_id: str = Field(pattern=UUID4)
+    text: str = Field(min_length=1, max_length=2000)
+    time: str = Field(pattern=r"^\d\d:\d\d:\d\d UTC$")
+    sender_id: str = Field(pattern=UUID4)
+    recipient_id: str = Field(pattern=UUID4)
+    recipient_user: str = Field(pattern=r"^[A-Za-z0-9_-]{1,32}$")
+    client_id: str = Field(pattern=UUID4)
+
+
 def session_event(user: str, replica: str, connection_id: str) -> str:
     return SessionEvent(user=user, container_id=replica, connection_id=connection_id,
                         sent_at=timestamp()).model_dump_json()
@@ -48,3 +74,12 @@ def broadcast_event(kind: Literal["chat", "system"], user: str, text: str, repli
     return BroadcastEvent(type=kind, user=user, text=text, container_id=replica,
                           event_id=str(uuid4()), sent_at=now,
                           time=now[11:19] + " UTC").model_dump_json()
+
+
+def private_event(user: str, text: str, replica: str, sender_id: str,
+                  recipient_id: str, recipient_user: str, client_id: str) -> str:
+    now = timestamp()
+    return PrivateEvent(user=user, text=text, container_id=replica,
+                        event_id=str(uuid4()), sent_at=now, time=now[11:19] + " UTC",
+                        sender_id=sender_id, recipient_id=recipient_id,
+                        recipient_user=recipient_user, client_id=client_id).model_dump_json()

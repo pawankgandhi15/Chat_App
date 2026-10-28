@@ -9,7 +9,7 @@
 | Presentation | React and React DOM 19.3.1, JavaScript/JSX |
 | Build and development | Vite 8.3.5, React plugin 6.1.2, Node.js 24 |
 | Styling | Existing responsive CSS in `frontend/css/style.css` |
-| Transport | Native browser WebSocket using `chat.v1` |
+| Transport | Native browser WebSocket using `chat.v2`, with `chat.v1` public-room fallback |
 | Shared client logic | Framework-independent protocol parser, connection manager and memory store |
 | Dependency management | Exact direct versions in `package.json` and integrity hashes in `package-lock.json` |
 | Production serving | Vite emits `frontend/dist/`; an unprivileged Nginx container serves the output |
@@ -52,9 +52,9 @@ Most UI components are functions. The message list uses [`getSnapshotBeforeUpdat
 
 1. The app creates a temporary name such as `guest_1234abcd`.
 2. The effect connects to the current page host at `/ws/<encoded-name>`, using `ws:` for HTTP and `wss:` for HTTPS.
-3. The socket requests `chat.v1`. The composer remains disabled until a valid first `session` event matches the requested name.
+3. The socket requests `chat.v2` and falls back to `chat.v1` on an older server. The composer remains disabled until a valid first `session` event matches the requested name.
 4. The user edits a controlled textarea. Enter submits, Shift+Enter adds a newline, and IME composition does not accidentally submit.
-5. The client validates the draft and sends plain text. A successful `send()` clears the draft and shows an unconfirmed-delivery notice.
+5. The client validates the draft and sends a v2 JSON command, or plain text to a v1 server. A public message clears its draft on `send()`; a direct message retains its draft until the sender's matching event is observed or a failure/timeout occurs.
 6. Broadcast events enter the store and render through React. The sender's event comes back through the backend/broker path; there is no separate optimistic echo.
 7. Disconnecting disables the composer while preserving the draft and current in-memory history.
 
@@ -94,9 +94,9 @@ The gateway CSP permits same-origin scripts, styles, images and connections; it 
 
 | Area | Implemented behavior |
 | --- | --- |
-| Desktop | Sidebar with room/name information; conversation, status and composer in the main pane |
+| Desktop | Sidebar with the shared room, one-to-one availability and name controls; conversation, status and composer in the main pane |
 | Mobile | Compact top bar and stacked chat layout; checked at 390 × 844 pixels |
-| Visual design | Dark surfaces, mint accent, existing CSS tokens and responsive breakpoints |
+| Visual design | Light surfaces, violet accents, a centered empty state and responsive breakpoints |
 | Status | Connecting, Connected, Reconnecting, Paused, Disconnected and Protocol error states |
 | Composer | Controlled draft, Unicode counter, disabled send before session or for blank text |
 | Reading continuity | Follow the bottom when pinned; preserve the visible anchor while reading older messages |
@@ -105,7 +105,7 @@ The gateway CSP permits same-origin scripts, styles, images and connections; it 
 | Accessibility basics | Semantic landmarks, explicit field labels, skip link, polite live status/log, visible keyboard focus |
 | Motion | Respect reduced-motion preferences |
 
-The current color tokens include `--bg: #101722`, `--line: #283241`, `--muted: #a1aec0`, `--text: #edf2f7` and `--accent: #a9e8cd`. CSS is the source of truth. The mobile browser check covers visibility and horizontal overflow; it is not a complete accessibility or cross-browser audit.
+The current color tokens include `--page: #eef0f7`, `--surface: #ffffff`, `--canvas: #fafaff`, `--ink: #25243b` and `--accent: #6655d9`. CSS is the source of truth. The sidebar lists available sessions and lets the user switch between General and direct conversations. On mobile, the conversation list scrolls horizontally. Names are unverified. The mobile browser check covers visibility and horizontal overflow; it is not a complete accessibility or cross-browser audit.
 
 ## 6. Local development and production delivery
 
@@ -135,9 +135,9 @@ CI installs locked npm dependencies, runs the client tests and builds the bundle
 
 - `npm test`: six existing protocol, normalization, socket-generation, retry and history-cap checks.
 - `npm run build`: production JSX/module compilation and asset generation.
-- `tests/browser/test_frontend.py`: three Chromium checks with intercepted WebSockets covering literal message content, Unicode counting, IME/keyboard handling, session gating, protocol failures, draft retention, rename, mobile layout, history eviction and scrolling.
+- `tests/browser/test_frontend.py`: four Chromium checks with intercepted WebSockets covering literal message content, Unicode counting, IME/keyboard handling, session gating, protocol failures, public/direct drafts, unread indicators, offline state, rename, mobile layout, history eviction and scrolling.
 - `tests/browser/test_ui.py`: the existing real two-tab backend/Redis browser flow, requiring the full stack.
 
 The React checks run against both Vite development and production preview. Screenshots are generated under ignored `artifacts/react/`. Mocked WebSockets validate browser behavior only. The older 42-test and 7,500-delivery results remain dated baseline evidence; see [Implementation status](IMPLEMENTATION_STATUS.md) for verification boundaries.
 
-There are still no accounts, rooms beyond the public general room, private conversations, durable history, receipts, typing indicators, media or end-to-end encryption. React changes the presentation/build layer; those features require additional product and backend work.
+Direct messages address active sessions, not verified accounts. There are still no accounts, additional public rooms, durable history, receipts, typing indicators, media or end-to-end encryption. See [Direct messaging](DIRECT_MESSAGING.md) for the exact routing and privacy boundaries.

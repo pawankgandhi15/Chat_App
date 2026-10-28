@@ -1,4 +1,6 @@
 from pathlib import Path
+import re
+from uuid import uuid4
 
 import pytest
 from playwright.sync_api import sync_playwright, expect
@@ -42,4 +44,39 @@ def test_browser_chat_and_mobile(request):
         assert left.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
         left.screenshot(path=str(output / "mobile.png"), full_page=True)
         assert not errors
+        browser.close()
+
+
+def test_real_direct_chat_excludes_third_browser(request):
+    url = request.config.getoption("--browser-url")
+    if not url:
+        pytest.skip("Use --browser-url with the full app and Redis")
+    suffix = uuid4().hex[:6]
+    alice_name, bob_name, observer_name = (f"Alice_{suffix}", f"Bob_{suffix}", f"Observer_{suffix}")
+    secret = f"direct message {uuid4()}"
+    with sync_playwright() as p:
+        browser = p.chromium.launch()
+        context = browser.new_context()
+        alice, bob, observer = (context.new_page() for _ in range(3))
+        frames = []
+        observer.on("websocket", lambda socket: socket.on("framereceived", lambda frame: frames.append(str(frame))))
+        for page, name in ((alice, alice_name), (bob, bob_name), (observer, observer_name)):
+            page.goto(url)
+            expect(page.locator("#status")).to_have_text("Connected", timeout=20000)
+            page.get_by_label("Display name", exact=True).fill(name)
+            page.get_by_role("button", name="Update name", exact=True).click()
+        alice_to_bob = alice.get_by_role("button", name=re.compile("^" + re.escape(bob_name)))
+        bob_to_alice = bob.get_by_role("button", name=re.compile("^" + re.escape(alice_name)))
+        expect(alice_to_bob).to_be_visible(timeout=20000)
+        expect(bob_to_alice).to_be_visible(timeout=20000)
+        alice_to_bob.click()
+        alice.get_by_label(f"Message {bob_name}").fill(secret)
+        alice.get_by_role("button", name="Send", exact=True).click()
+        expect(alice.get_by_text(secret, exact=True)).to_be_visible(timeout=10000)
+        bob_to_alice.click()
+        expect(bob.get_by_text(secret, exact=True)).to_be_visible(timeout=10000)
+        observer.wait_for_timeout(500)
+        assert observer.get_by_text(secret, exact=True).count() == 0
+        assert all(secret not in frame for frame in frames)
+        context.close()
         browser.close()

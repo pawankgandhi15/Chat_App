@@ -17,9 +17,26 @@ export function parseEvent(raw) {
   if (typeof raw !== "string" || encoder.encode(raw).length > 65536) throw new Error("Invalid event.");
   const e = JSON.parse(raw);
   if (!e || Array.isArray(e) || e.schema_version !== 1) throw new Error("Unsupported protocol.");
+  if (e.type === "peers") {
+    if (Object.keys(e).length !== 3 || !Array.isArray(e.peers) || e.peers.length > 512) throw new Error("Invalid peer list.");
+    const ids = new Set();
+    for (const peer of e.peers) {
+      if (!peer || Array.isArray(peer) || Object.keys(peer).length !== 2 ||
+          typeof peer.connection_id !== "string" || !uuid.test(peer.connection_id) ||
+          typeof peer.user !== "string" || !USERNAME.test(peer.user) || ids.has(peer.connection_id)) throw new Error("Invalid peer.");
+      ids.add(peer.connection_id);
+    }
+    return e;
+  }
+  if (e.type === "notice") {
+    if (Object.keys(e).length !== 4 || typeof e.client_id !== "string" || !uuid.test(e.client_id) ||
+        typeof e.message !== "string" || e.message.length < 1 || e.message.length > 200) throw new Error("Invalid notice.");
+    return e;
+  }
   const fields = e.type === "session"
     ? ["schema_version", "type", "connection_id", "container_id", "user", "sent_at"]
-    : ["schema_version", "type", "event_id", "sent_at", "user", "text", "container_id", "time"];
+    : ["schema_version", "type", "event_id", "sent_at", "user", "text", "container_id", "time",
+       ...(e.type === "private" ? ["sender_id", "recipient_id", "recipient_user", "client_id"] : [])];
   if (Object.keys(e).length !== fields.length || fields.some(k => !Object.hasOwn(e, k))) throw new Error("Unexpected event fields.");
   if (typeof e.user !== "string" || !USERNAME.test(e.user) ||
       typeof e.container_id !== "string" || e.container_id.length < 1 || e.container_id.length > 64 ||
@@ -27,8 +44,12 @@ export function parseEvent(raw) {
       new Date(e.sent_at).toISOString() !== e.sent_at) throw new Error("Invalid event identity.");
   if (e.type === "session") {
     if (typeof e.connection_id !== "string" || !uuid.test(e.connection_id)) throw new Error("Invalid session.");
-  } else if (!["chat", "system"].includes(e.type) || typeof e.event_id !== "string" || !uuid.test(e.event_id) ||
+  } else if (!["chat", "system", "private"].includes(e.type) || typeof e.event_id !== "string" || !uuid.test(e.event_id) ||
       typeof e.text !== "string" || [...e.text].length < 1 || [...e.text].length > 2000 ||
       e.time !== e.sent_at.slice(11, 19) + " UTC") throw new Error("Invalid message.");
+  if (e.type === "private" && (typeof e.sender_id !== "string" || !uuid.test(e.sender_id) ||
+      typeof e.recipient_id !== "string" || !uuid.test(e.recipient_id) || e.sender_id === e.recipient_id ||
+      typeof e.recipient_user !== "string" || !USERNAME.test(e.recipient_user) ||
+      typeof e.client_id !== "string" || !uuid.test(e.client_id))) throw new Error("Invalid private message.");
   return e;
 }

@@ -21,7 +21,7 @@ class Runtime:
         self.metrics = Metrics(self.replica)
         self.sessions = Sessions(settings, self.metrics, self.replica)
         self.broker = Broker(settings, self.metrics, self.sessions.fanout,
-                             lambda: self.sessions.close_all(1011))
+                             self.sessions.broker_unavailable)
 
     def drain(self):
         self.sessions.drain()
@@ -33,11 +33,13 @@ def create_app(settings=None):
     @asynccontextmanager
     async def lifespan(app):
         await runtime.broker.start()
+        await runtime.sessions.start_presence(runtime.broker)
         log_event("started", release_id=runtime.settings.release_id)
         try:
             yield
         finally:
             runtime.drain()
+            await runtime.sessions.stop_presence()
             await runtime.broker.stop()
             log_event("stopped")
 
@@ -66,16 +68,18 @@ def create_app(settings=None):
 
         if ws.headers.get("origin") not in runtime.settings.origins:
             return await deny(403, "forbidden_origin")
-        if "chat.v1" not in ws.scope.get("subprotocols", []):
+        offered = ws.scope.get("subprotocols", [])
+        protocol = "chat.v2" if "chat.v2" in offered else "chat.v1" if "chat.v1" in offered else None
+        if not protocol:
             return await deny(400, "unsupported_subprotocol")
         if not valid_username(username):
             return await deny(400, "invalid_username")
         if not runtime.broker.ready or not runtime.sessions.reserve():
             return await deny(503, "server_busy_or_draining")
         try:
-            await ws.accept(subprotocol="chat.v1")
+            await ws.accept(subprotocol=protocol)
             runtime.metrics.admission.labels("accepted").inc()
-            await runtime.sessions.run(ws, username, runtime.broker)
+            await runtime.sessions.run(ws, username, runtime.broker, protocol)
         finally:
             runtime.sessions.release()
 

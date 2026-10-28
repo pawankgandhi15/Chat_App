@@ -4,6 +4,13 @@ This file records actual repository changes. Planned application features remain
 
 ## Unreleased
 
+### Session-based direct messaging — 2026-10-28
+
+- Added `chat.v2`, ephemeral cross-replica presence snapshots and direct-message routing limited to the sender and selected recipient sessions; retained `chat.v1` public-room compatibility.
+- Added online session selection, conversation-specific drafts, unread counts, offline handling and bounded client history. Direct drafts remain until the sender observes its matching event.
+- Added protocol/client, browser, two-ASGI-instance Pub/Sub-double and real Redis container checks. The real Redis container check is included for CI but was not run locally for this change.
+- Documented unverified display names, plaintext service/Redis access, lack of end-to-end encryption and the absence of durable/offline delivery.
+
 ### React frontend — 2026-10-28
 
 - Converted the presentation layer to React components while retaining chat.v1 validation, socket generation guards, retry limits and the bounded draft/message store.

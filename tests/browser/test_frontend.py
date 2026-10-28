@@ -1,5 +1,6 @@
 """React browser checks with intercepted WebSockets; no backend or Redis required."""
 import json
+import re
 from pathlib import Path
 from urllib.parse import unquote, urlsplit
 from uuid import uuid4
@@ -16,6 +17,8 @@ class Room:
         self.routes = []
         self.received = []
         self.auto_session = True
+        self.sessions = {}
+        self.peer = {"connection_id": str(uuid4()), "user": "Alice"}
 
     def route(self, socket):
         self.routes.append(socket)
@@ -26,9 +29,15 @@ class Room:
     def greet(self, socket=None):
         socket = socket or self.routes[-1]
         user = unquote(urlsplit(socket.url).path.rsplit("/", 1)[-1])
+        session_id = str(uuid4())
+        self.sessions[socket] = {"id": session_id, "user": user}
         socket.send(json.dumps({"schema_version": 1, "type": "session",
-            "connection_id": str(uuid4()), "container_id": "browser-test",
+            "connection_id": session_id, "container_id": "browser-test",
             "user": user, "sent_at": STAMP}))
+        self.peers([self.peer], socket)
+
+    def peers(self, peers, socket=None):
+        (socket or self.routes[-1]).send(json.dumps({"schema_version": 1, "type": "peers", "peers": peers}))
 
     def broadcast(self, text, user="Alice", kind="chat", socket=None):
         event = {"schema_version": 1, "type": kind, "event_id": str(uuid4()),
@@ -37,9 +46,27 @@ class Room:
         (socket or self.routes[-1]).send(json.dumps(event))
 
     def receive(self, socket, text):
+        payload = json.loads(text)
+        text = payload["text"]
         self.received.append(text)
         user = unquote(urlsplit(socket.url).path.rsplit("/", 1)[-1])
-        self.broadcast(text, user, socket=socket)
+        if payload["type"] == "private":
+            own = self.sessions[socket]
+            event = {"schema_version": 1, "type": "private", "event_id": str(uuid4()),
+                "sent_at": STAMP, "user": user, "text": text, "container_id": "browser-test",
+                "time": "10:00:00 UTC", "sender_id": own["id"], "recipient_id": payload["to"],
+                "recipient_user": self.peer["user"], "client_id": payload["client_id"]}
+            socket.send(json.dumps(event))
+        else:
+            self.broadcast(text, user, socket=socket)
+
+    def private_from_peer(self, text):
+        socket = self.routes[-1]
+        own = self.sessions[socket]
+        socket.send(json.dumps({"schema_version": 1, "type": "private", "event_id": str(uuid4()),
+            "sent_at": STAMP, "user": self.peer["user"], "text": text, "container_id": "browser-test",
+            "time": "10:00:00 UTC", "sender_id": self.peer["connection_id"], "recipient_id": own["id"],
+            "recipient_user": own["user"], "client_id": str(uuid4())}))
 
 
 @pytest.fixture(scope="module")
@@ -139,6 +166,37 @@ def test_react_session_gate_and_protocol_error(ui):
     expect(page.get_by_label("Message general")).to_have_value("preserved")
     expect(page.get_by_label("Message general")).to_be_disabled()
     assert room.received == []
+
+
+def test_direct_conversation_drafts_unread_and_offline(ui):
+    page, room, url = ui
+    page.goto(url)
+    expect(page.locator("#status")).to_have_text("Connected")
+    person = page.get_by_role("button", name=re.compile("^Alice"))
+    expect(person).to_be_visible()
+    page.get_by_label("Message general").fill("public draft")
+    person.click()
+    direct = page.get_by_label("Message Alice")
+    expect(direct).to_have_value("")
+    direct.fill("private hello")
+    page.get_by_role("button", name="Send", exact=True).click()
+    expect(page.locator(".message p").last).to_have_text("private hello")
+    expect(direct).to_have_value("")
+    page.get_by_role("button", name=re.compile("^General")).click()
+    expect(page.get_by_label("Message general")).to_have_value("public draft")
+    assert page.get_by_text("private hello", exact=True).count() == 0
+    room.private_from_peer("a private reply")
+    expect(person.locator(".unread")).to_have_text("1")
+    page.set_viewport_size({"width": 390, "height": 844})
+    person.click()
+    expect(page.get_by_text("a private reply", exact=True)).to_be_visible()
+    expect(person.locator(".unread")).to_have_count(0)
+    direct.fill("keep this draft")
+    room.peers([])
+    expect(direct).to_be_disabled()
+    expect(direct).to_have_value("keep this draft")
+    expect(page.get_by_text("Offline · messages cannot be sent")).to_be_visible()
+    assert page.evaluate("document.documentElement.scrollWidth <= window.innerWidth")
 
 
 def test_react_bounded_history_preserves_reading_position(ui):
