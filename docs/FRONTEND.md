@@ -1,6 +1,6 @@
 # React Frontend, UI/UX and Client Architecture
 
-**Saved-chat extension:** `AccountChat.jsx` now provides sign-in/registration, username search, stable direct conversations, saved history pagination and cookie-session restoration. `App.jsx` restores an existing login or offers account access from guest mode. Guest hooks below are unchanged; the separate account data flow is described in [Accounts and history](ACCOUNTS_AND_HISTORY.md).
+**Component upgrade, 28 October 2026:** `App.jsx` restores the login and selects guest, authentication or saved-chat screens. `AccountChat.jsx` is now a small composition layer; networking and saved-chat state live in `useSavedChat.js`. Focused components provide authentication, conversation navigation, the header, timeline and shared message composer. The persistence contract is described in [Accounts and history](ACCOUNTS_AND_HISTORY.md).
 
 **Updated: 28 October 2026.** Baatchit uses React 19 and Vite 8 for its browser interface. This guide describes the implemented client. It supersedes the earlier native DOM renderer; the WebSocket protocol and backend architecture are unchanged.
 
@@ -10,8 +10,8 @@
 | --- | --- |
 | Presentation | React and React DOM 19.3.1, JavaScript/JSX |
 | Build and development | Vite 8.3.5, React plugin 6.1.2, Node.js 24 |
-| Styling | Existing responsive CSS in `frontend/css/style.css` |
-| Transport | Native browser WebSocket using `chat.v2`, with `chat.v1` public-room fallback |
+| Styling | Base/guest layout in `frontend/css/style.css`; shared components and account layouts in `frontend/css/components.css` |
+| Transport | Guest `chat.v2`/`chat.v1` WebSockets; saved-chat authenticated HTTP API and `chat.accounts.v1` update hints |
 | Shared client logic | Framework-independent protocol parser, connection manager and memory store |
 | Dependency management | Exact direct versions in `package.json` and integrity hashes in `package-lock.json` |
 | Production serving | Vite emits `frontend/dist/`; an unprivileged Nginx container serves the output |
@@ -22,12 +22,18 @@ React adds component composition, controlled form fields and lifecycle cleanup. 
 
 ~~~mermaid
 flowchart TD
-    Entry["main.jsx: React root and StrictMode"] --> App["App.jsx: interface composition"]
-    App --> Hook["useChat: subscription, actions and lifecycle"]
-    App --> Sidebar["Sidebar: editable display name"]
-    App --> Header["ChatHeader: status and connection actions"]
-    App --> Composer["Composer: draft, keyboard and send controls"]
-    App --> Messages["MessageList: text rendering and scroll anchoring"]
+    Entry["main.jsx: React root and StrictMode"] --> App["App.jsx: restore session and select screen"]
+    App --> Guest["GuestApp.jsx"]
+    App --> Account["AccountChat.jsx"]
+    App --> Auth["AuthForm.jsx"]
+    Guest --> Hook["useChat: guest actions and lifecycle"]
+    Guest --> Messages["MessageList: bounded guest timeline"]
+    Guest --> Composer["MessageComposer: shared draft and send UI"]
+    Account --> Composer
+    Account --> SavedHook["useSavedChat: requests, hints, drafts and history"]
+    Account --> SavedUI["ConversationSidebar / SavedHeader / SavedTimeline"]
+    SavedHook --> API["services/api.js: cookie-authenticated HTTP"]
+    Auth --> API
     Hook --> Store["state.js: session, draft and bounded events"]
     Hook --> Connection["connection.js: sockets and retry timers"]
     Connection --> Parser["protocol.js: exact envelope and input rules"]
@@ -38,19 +44,61 @@ flowchart TD
 | Source | Responsibility and invariant |
 | --- | --- |
 | [main.jsx](../frontend/src/main.jsx) | Creates the React root, imports CSS and enables StrictMode for development lifecycle checks. |
-| [App.jsx](../frontend/src/App.jsx) | Composes the sidebar, header, conversation and controlled composer. Retains semantic labels and stable IDs used by browser checks. |
+| [App.jsx](../frontend/src/App.jsx) | Restores the cookie-backed login and selects the guest, authentication or account screen. |
+| [GuestApp.jsx](../frontend/src/GuestApp.jsx) | Guest sidebar, session contacts, connection controls and public/direct conversation selection. |
+| [AccountChat.jsx](../frontend/src/AccountChat.jsx) | Composes account components and connects their actions to one saved-chat hook. |
+| [useSavedChat.js](../frontend/src/hooks/useSavedChat.js) | Owns authenticated API calls, WebSocket hints, refresh, paginated history, per-conversation drafts, idempotent pending sends and loading/error state. |
+| [api.js](../frontend/src/services/api.js) | Shared same-origin HTTP wrapper with cookies, timeout and response-error handling. |
+| [AuthForm.jsx](../frontend/src/components/accounts/AuthForm.jsx) | Login/registration, password visibility, validation, submission state and account-access errors. |
+| [ConversationSidebar.jsx](../frontend/src/components/accounts/ConversationSidebar.jsx) | Username discovery, filtering loaded chats, activity filter, draft previews and sign-out controls. |
+| [SavedHeader.jsx](../frontend/src/components/accounts/SavedHeader.jsx) | Selected conversation identity, live-update status and refresh action. |
+| [SavedTimeline.jsx](../frontend/src/components/accounts/SavedTimeline.jsx) | Saved text messages, local-date separators, copy actions, history pagination, reading-position restoration and jump to latest. |
+| [MessageComposer.jsx](../frontend/src/components/MessageComposer.jsx) | Shared controlled textarea, Unicode counter, limit feedback, emoji insertion, keyboard/IME behavior and pending-send state. It never decides transport or delivery guarantees. |
+| [ui.jsx](../frontend/src/components/ui.jsx) | Shared Button, Avatar, Brand, StatusBadge, Feedback, SearchField, SkeletonList and EmptyState primitives. |
+| [ConversationTools.jsx](../frontend/src/components/ConversationTools.jsx) | Shared header action and Search/Details/Keyboard navigation; keyed to the selected conversation so switching resets its state. |
+| [Dialog.jsx](../frontend/src/components/Dialog.jsx) | Native modal dialog, accessible title, Escape/close controls, focus containment and restoration to its trigger. |
+| [MessageSearch.jsx](../frontend/src/components/MessageSearch.jsx) | Case-insensitive literal text search within supplied messages; separate results leave timeline scroll and drafts intact. |
+| [ConversationDetails.jsx](../frontend/src/components/ConversationDetails.jsx) | Mode-specific audience, persistence, identity, connection/update status and loaded-message count. |
+| [KeyboardHelp.jsx](../frontend/src/components/KeyboardHelp.jsx) | Discoverable guide to existing composer and navigation shortcuts. |
 | [useChat.js](../frontend/src/useChat.js) | Creates one retained store/connection pair per mounted app, subscribes to state, dispatches actions, and releases sockets/timers on cleanup. |
 | [MessageList.jsx](../frontend/src/components/MessageList.jsx) | Renders strings as text, keys events by UUID and keeps the reading position stable when old messages are removed. |
 | [connection.js](../frontend/js/connection.js) | Owns the native socket, generation token, session timeout and retry timers. Late events from obsolete sockets cannot mutate current state. |
 | [protocol.js](../frontend/js/protocol.js) | Validates exact event fields, versions, identities and timestamps; normalizes outgoing plain text. |
-| [state.js](../frontend/js/state.js) | Retains session status, draft and at most 500 events. Nothing is persisted to localStorage or a database. |
-| [vite.config.js](../frontend/vite.config.js) | Defines loopback dev/preview servers, optional WebSocket proxy, CSP for production preview and static build output. |
+| [state.js](../frontend/js/state.js) | Guest-only memory store: session status, drafts and at most 500 temporary events. Saved accounts use the separate API/database path. |
+| [vite.config.js](../frontend/vite.config.js) | Defines loopback dev/preview servers, optional API/WebSocket proxy, CSP for production preview and static build output. |
 
 The hook uses [React's `useSyncExternalStore`](https://react.dev/reference/react/useSyncExternalStore) to subscribe to the existing state module. Store snapshots retain object identity until an update. React does not maintain a second copy of the message history or transport state.
 
-Most UI components are functions. The message list uses [`getSnapshotBeforeUpdate`](https://react.dev/reference/react/Component#getSnapshotBeforeUpdate) to measure a retained visible message before React changes the DOM. After the update, it restores that message's relative position. Fractional scroll rounding is carried forward to prevent drift over repeated evictions; native scroll anchoring is disabled for this container.
+Most UI components are functions. The guest message list uses [`getSnapshotBeforeUpdate`](https://react.dev/reference/react/Component#getSnapshotBeforeUpdate) to measure a retained visible message before React changes the DOM. After the update, it restores that message's relative position. Fractional scroll rounding is carried forward to prevent drift over repeated evictions; native scroll anchoring is disabled for this container. The saved timeline records a visible message before requesting an older page and restores its offset after the page arrives.
+
+### Shared component behavior
+
+- Buttons have an explicit type and support disabled/busy state. Icon-only actions have accessible names; decorative avatars/icons are hidden from assistive technology.
+- The same composer serves both chat modes. It preserves drafts, counts Unicode code points, prevents oversized submissions, handles Enter/Shift+Enter and IME composition, and inserts an emoji at the current text selection. Escape closes the picker and restores focus. Guest sends and saved sends retain their distinct transport/acknowledgment behavior.
+- Account search is debounced and cancelled when the query changes. Loading, no-result and failure states are distinct. A separate filter searches only the conversations already loaded into the sidebar; it is not a server-wide message search.
+- Activity markers remain local to the open tab. The Activity filter does not claim durable unread counts or read receipts. Draft previews are in-memory and are cleared on sign-out/refresh, as before.
+- Saved history groups messages by the browser's local date and displays compact local times, with full timestamps available on hover. Copy uses the browser Clipboard API with a visible success/failure message. No message HTML is interpreted.
+- Failed history loading presents a retry action instead of an empty-conversation welcome. Cached messages remain visible if a later refresh fails. Loading placeholders respect reduced-motion preferences.
+- Both layouts adapt to mobile widths; the authentication story panel collapses on small screens. Responsive behavior uses CSS and does not require another component library or external assets.
+- Submission locks prevent duplicate conversation-opening requests. A completed send only changes notices/view mode for the conversation still selected, preserving another thread's draft/view when the user switches during a request.
+
+### Conversation tools
+
+The search icon in either conversation header opens a modal containing three sections:
+
+- **Search:** a case-insensitive substring search of the selected conversation's loaded text messages. Guest system events are excluded. Saved-chat results use the current history window, not the entire database. The panel states this scope; load older pages in the timeline to include older messages. Results show the latest 50 matches in reverse timeline order and report the full match count. Text renders through React without interpreting HTML or constructing regular expressions.
+- **Details:** shows the conversation audience, identity model, retention behavior and current loaded count. Guest names remain unverified. Saved-chat update connectivity does not imply that the peer is online. Neither mode claims end-to-end encryption or read receipts.
+- **Keyboard:** explains Enter, Shift+Enter, Tab/Shift+Tab and Escape. These describe existing behavior rather than installing global shortcuts that could interfere with typing.
+
+`ConversationTools` adapts each message model into `{id, text, sentAt, author}`. It only receives the selected conversation's messages and never fetches other conversations. Switching sections retains the search query; closing or switching conversations clears it. The native `<dialog>` makes the background inert and contains keyboard focus while open. Escape or the close button restores focus to the trigger. Mobile sizing keeps the dialog within the viewport with scrollable content. No new dependency or backend endpoint is needed.
+
+### Verification scope
+
+The production Vite build and 10 existing client tests passed. Browser checks exercise guest messaging, emoji insertion and keyboard focus, the character limit, session/protocol behavior, guest scroll anchoring, account login/password visibility, saved-history reload/retry, drafts across conversations, username-search results, loaded-chat filters, clipboard copying, date grouping and mobile layout. Account checks use real HTTP/WebSockets and SQLite with Redis publishing stubbed; guest checks intercept WebSockets. They do not establish PostgreSQL/Kubernetes or cloud performance results.
 
 ## 3. Connection lifecycle and message flow
+
+This section describes **guest chat**. Saved chats use `useSavedChat` and the HTTP/history contract linked above.
 
 1. The app creates a temporary name such as `guest_1234abcd`.
 2. The effect connects to the current page host at `/ws/<encoded-name>`, using `ws:` for HTTP and `wss:` for HTTPS.

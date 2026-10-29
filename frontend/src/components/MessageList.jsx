@@ -1,11 +1,12 @@
 import {PureComponent, createRef, memo} from "react";
 import {Icon} from "./Icon.jsx";
+import {Avatar} from "./ui.jsx";
 
 const Message = memo(function Message({event}) {
   if (event.type === "system") return <li className="system-message" data-id={event.event_id}>{event.text}</li>;
   return (
     <li className="message" data-id={event.event_id}>
-      <span className="avatar" aria-hidden="true">{event.user.slice(0, 2).toUpperCase()}</span>
+      <Avatar name={event.user} className="avatar" />
       <div className="message-content">
         <div className="message-heading"><strong>{event.user}</strong><time dateTime={event.sent_at}>{event.time}</time></div>
         <p>{event.text}</p>

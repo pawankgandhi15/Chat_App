@@ -100,7 +100,7 @@ For tool installation and troubleshooting, see [Development](docs/DEVELOPMENT.md
 
 - **Accounts and saved chats:** password login, permanent account IDs, unique direct conversations, authorized paginated history and idempotent saves in PostgreSQL.
 - **Live messaging:** session-first `chat.v2` WebSockets for public and direct messages, with `chat.v1` compatibility and Redis Pub/Sub across backend replicas.
-- **Responsive interface:** keyboard controls, connection feedback, safe text rendering and mobile layout.
+- **Responsive React interface:** reusable components, conversation filters, draft previews, date separators, copy actions, emoji insertion, accessible keyboard controls and mobile layouts.
 - **Recovery:** bounded retries, retained unsent drafts and no automatic message resending.
 - **Resource controls:** connection/rate limits, bounded queues, send deadlines and slow-client isolation.
 - **Kubernetes:** four Deployments, five application Pods, readiness/liveness probes and enforced network isolation.

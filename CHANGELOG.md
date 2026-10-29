@@ -4,6 +4,14 @@ This file records actual repository changes. Planned application features remain
 
 ## Unreleased
 
+### React component and interface upgrade — 2026-10-28
+
+- Split screen composition, account networking and shared UI into focused React components, a saved-chat hook and an API module; reused the composer, avatars, brand and status controls across guest/account views.
+- Added loaded-conversation search, activity filters, draft previews, explicit search/loading/error states, history retry, date separators, copy-message actions and jump-to-latest navigation.
+- Added a keyboard-accessible emoji picker and Unicode length feedback to the shared composer; refreshed desktop/mobile styling and the sign-in/registration layout with password visibility controls.
+- Added shared conversation tools with a native modal, loaded-message search, conversation details and keyboard help. Scoped results to the selected conversation; verified focus restoration, guest/direct separation, safe text rendering and mobile dialog layout.
+- Preserved cookie-session checks, per-conversation drafts and retry deduplication. Added browser coverage for the new interactions; no backend or AWS infrastructure changes.
+
 ### Accounts and persistent conversations — 2026-10-28
 
 - Added password registration/login, stable account IDs, revocable HttpOnly sessions, username search and account-bound direct conversations.
